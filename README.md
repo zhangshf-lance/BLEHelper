@@ -24,6 +24,8 @@ run_admin.bat
 dist\BLEAssistant_v2.exe
 ```
 
+打包版本已内置工具图标，窗口标题栏和 Windows 文件图标会使用同一套 `assets\app_icon.ico`。
+
 打包后的 EXE 需要管理员方式启动时可运行：
 
 ```bat

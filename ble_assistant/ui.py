@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import datetime as _dt
+import sys
 import tkinter.font as tkfont
 import tkinter as tk
 from concurrent.futures import Future, ThreadPoolExecutor
+from pathlib import Path
 from tkinter import messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
@@ -23,6 +25,11 @@ from .serial_win import (
 )
 
 
+def _resource_path(*parts: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+    return base.joinpath(*parts)
+
+
 class BleAssistantApp(tk.Tk):
     BG = "#f4f7fb"
     TEXT_BG = "#f8fafc"
@@ -37,6 +44,7 @@ class BleAssistantApp(tk.Tk):
         self.geometry("1180x800")
         self.minsize(1040, 700)
         self.configure(background=self.BG)
+        self._set_app_icon()
 
         self.central = BleCentral(self.log, self._on_ble_notification)
         self.peripheral = BlePeripheral(self.log, self._on_peripheral_rx)
@@ -50,6 +58,18 @@ class BleAssistantApp(tk.Tk):
         self._refresh_serial_ports()
         self._show_backend_status()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _set_app_icon(self) -> None:
+        icon_path = _resource_path("assets", "app_icon.ico")
+        png_path = _resource_path("assets", "app_icon.png")
+        try:
+            if icon_path.exists():
+                self.iconbitmap(default=str(icon_path))
+            if png_path.exists():
+                self._icon_photo = tk.PhotoImage(file=str(png_path))
+                self.iconphoto(True, self._icon_photo)
+        except tk.TclError:
+            pass
 
     def _build_style(self) -> None:
         style = ttk.Style(self)
