@@ -235,6 +235,9 @@ class BleAssistantApp(tk.Tk):
         send_frame.columnconfigure(0, weight=1)
         self.ble_send_text = ttk.Entry(send_frame)
         self.ble_send_text.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
+        ttk.Button(
+            send_frame, text="清除发送", command=lambda: self._clear_entry(self.ble_send_text)
+        ).grid(row=0, column=1, padx=(0, 8), pady=8)
 
         recv_frame = ttk.LabelFrame(right, text="接收 / 读取")
         recv_frame.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
@@ -242,6 +245,9 @@ class BleAssistantApp(tk.Tk):
         recv_frame.rowconfigure(0, weight=1)
         self.ble_recv = ScrolledText(recv_frame, height=16, wrap="word")
         self.ble_recv.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        ttk.Button(
+            recv_frame, text="清除接收", command=lambda: self._clear_text(self.ble_recv)
+        ).grid(row=1, column=0, sticky="e", padx=8, pady=(0, 8))
 
     def _build_peripheral_tab(self) -> None:
         tab = self.peripheral_tab
@@ -303,11 +309,17 @@ class BleAssistantApp(tk.Tk):
         self.peripheral_notify_button.grid(
             row=0, column=1, padx=(0, 8), pady=8
         )
+        ttk.Button(
+            send, text="清除发送", command=lambda: self._clear_entry(self.peripheral_send_text)
+        ).grid(row=0, column=2, padx=(0, 8), pady=8)
         recv = ttk.LabelFrame(io, text="主设备写入")
         recv.columnconfigure(0, weight=1)
         recv.rowconfigure(0, weight=1)
         self.peripheral_recv = ScrolledText(recv, height=12, wrap="word")
         self.peripheral_recv.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        ttk.Button(
+            recv, text="清除接收", command=lambda: self._clear_text(self.peripheral_recv)
+        ).grid(row=1, column=0, sticky="e", padx=8, pady=(0, 8))
         io.add(send, weight=0)
         io.add(recv, weight=1)
 
@@ -358,6 +370,9 @@ class BleAssistantApp(tk.Tk):
         terminal.rowconfigure(0, weight=1)
         self.serial_recv = ScrolledText(terminal, height=18, wrap="word")
         self.serial_recv.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        ttk.Button(
+            terminal, text="清除接收", command=lambda: self._clear_text(self.serial_recv)
+        ).grid(row=1, column=0, sticky="e", padx=8, pady=(0, 8))
 
         send = ttk.LabelFrame(tab, text="发送数据")
         send.grid(row=3, column=0, sticky="ew", pady=(8, 0))
@@ -366,12 +381,20 @@ class BleAssistantApp(tk.Tk):
         self.serial_send_text.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
         self.serial_send_text.bind("<Return>", lambda _event: self._serial_send())
         ttk.Button(send, text="发送", command=self._serial_send).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(
+            send, text="清除发送", command=lambda: self._clear_entry(self.serial_send_text)
+        ).grid(row=0, column=2, padx=(0, 8), pady=8)
 
     def _build_log_tab(self) -> None:
         self.log_tab.columnconfigure(0, weight=1)
-        self.log_tab.rowconfigure(0, weight=1)
+        self.log_tab.rowconfigure(1, weight=1)
+        toolbar = ttk.Frame(self.log_tab)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 0))
+        ttk.Button(toolbar, text="清除日志", command=lambda: self._clear_text(self.log_text)).pack(
+            side="right"
+        )
         self.log_text = ScrolledText(self.log_tab, wrap="word")
-        self.log_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        self.log_text.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
 
     def _style_text_widgets(self) -> None:
         for widget in (self.ble_recv, self.peripheral_recv, self.serial_recv, self.log_text):
@@ -401,6 +424,12 @@ class BleAssistantApp(tk.Tk):
     def _append_text(self, widget: ScrolledText, text: str) -> None:
         widget.insert("end", text)
         widget.see("end")
+
+    def _clear_text(self, widget: ScrolledText) -> None:
+        widget.delete("1.0", "end")
+
+    def _clear_entry(self, widget) -> None:
+        widget.delete(0, "end")
 
     def _future_result(self, future: Future, callback, error_prefix: str) -> None:
         def done(done_future: Future) -> None:
