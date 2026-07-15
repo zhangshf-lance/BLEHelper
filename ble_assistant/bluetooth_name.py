@@ -31,6 +31,7 @@ def set_system_bluetooth_name(name: str) -> BluetoothNameResult:
     if not adapters:
         return BluetoothNameResult(False, "未找到可覆盖名称的 Windows 蓝牙适配器")
 
+    successes: list[str] = []
     failures: list[str] = []
     for adapter in adapters:
         try:
@@ -43,10 +44,13 @@ def set_system_bluetooth_name(name: str) -> BluetoothNameResult:
             continue
 
         restart_message = _restart_device(adapter.instance_id)
-        return BluetoothNameResult(
-            True,
-            f"已写入系统蓝牙名称：{clean_name}（{adapter.instance_id}）；{restart_message}",
-        )
+        successes.append(f"{adapter.instance_id}: {restart_message}")
+
+    if successes:
+        message = f"已写入系统蓝牙名称：{clean_name}；" + "；".join(successes)
+        if failures:
+            message += "；部分适配器失败：" + "；".join(failures)
+        return BluetoothNameResult(True, message)
 
     return BluetoothNameResult(False, "；".join(failures) if failures else "系统蓝牙名称覆盖失败")
 
@@ -106,9 +110,9 @@ def _query_string(key, value_name: str) -> str:
 
 def _adapter_priority(adapter: BluetoothAdapter) -> tuple[int, str]:
     instance_id = adapter.instance_id.upper()
-    if instance_id.startswith("BTH\\MS_BTHBRB\\"):
-        return (0, adapter.instance_id)
     if instance_id.startswith("USB\\"):
+        return (0, adapter.instance_id)
+    if instance_id.startswith("BTH\\MS_BTHBRB\\"):
         return (1, adapter.instance_id)
     return (2, adapter.instance_id)
 
