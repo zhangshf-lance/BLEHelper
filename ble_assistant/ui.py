@@ -197,11 +197,13 @@ class BleAssistantApp(tk.Tk):
 
         options = ttk.Frame(right)
         options.grid(row=1, column=0, sticky="ew", pady=8)
-        self.ble_hex = tk.BooleanVar(value=False)
+        self.ble_send_hex = tk.BooleanVar(value=False)
+        self.ble_recv_hex = tk.BooleanVar(value=False)
         self.ble_write_response = tk.BooleanVar(value=True)
-        ttk.Checkbutton(options, text="HEX", variable=self.ble_hex).pack(side="left")
+        ttk.Checkbutton(options, text="发送HEX", variable=self.ble_send_hex).pack(side="left")
+        ttk.Checkbutton(options, text="接收HEX", variable=self.ble_recv_hex).pack(side="left", padx=(8, 12))
         ttk.Checkbutton(options, text="响应写", variable=self.ble_write_response).pack(
-            side="left", padx=12
+            side="left", padx=(0, 12)
         )
         ttk.Button(options, text="读", command=self._ble_read).pack(side="left")
         ttk.Button(options, text="写", command=self._ble_write).pack(side="left", padx=6)
@@ -312,8 +314,10 @@ class BleAssistantApp(tk.Tk):
 
         options = ttk.Frame(tab)
         options.grid(row=1, column=0, sticky="ew", pady=8)
-        self.serial_hex = tk.BooleanVar(value=False)
-        ttk.Checkbutton(options, text="HEX", variable=self.serial_hex).pack(side="left")
+        self.serial_send_hex = tk.BooleanVar(value=False)
+        self.serial_recv_hex = tk.BooleanVar(value=False)
+        ttk.Checkbutton(options, text="发送HEX", variable=self.serial_send_hex).pack(side="left")
+        ttk.Checkbutton(options, text="接收HEX", variable=self.serial_recv_hex).pack(side="left", padx=(8, 12))
         ttk.Label(options, text="行尾").pack(side="left", padx=(12, 0))
         self.serial_line_ending = tk.StringVar(value="none")
         ttk.Combobox(
@@ -463,7 +467,7 @@ class BleAssistantApp(tk.Tk):
         if not char_uuid:
             return
         try:
-            data = encode_payload(self.ble_send_text.get(), self.ble_hex.get(), "none")
+            data = encode_payload(self.ble_send_text.get(), self.ble_send_hex.get(), "none")
         except ValueError as exc:
             self._show_error("BLE 数据格式错误", exc)
             return
@@ -490,7 +494,7 @@ class BleAssistantApp(tk.Tk):
         self.after(0, lambda: self._append_ble_rx("NOTIFY", sender, data))
 
     def _append_ble_rx(self, label: str, source: str, data: bytes) -> None:
-        body = format_payload(data, self.ble_hex.get())
+        body = format_payload(data, self.ble_recv_hex.get())
         self._append_text(self.ble_recv, f"{label} {source}: {body}\n")
 
     def _peripheral_start(self) -> None:
@@ -606,7 +610,7 @@ class BleAssistantApp(tk.Tk):
         try:
             data = encode_payload(
                 self.serial_send_text.get(),
-                self.serial_hex.get(),
+                self.serial_send_hex.get(),
                 self.serial_line_ending.get(),
             )
             count = self.serial_port.write(data)
@@ -616,7 +620,7 @@ class BleAssistantApp(tk.Tk):
         self.log(f"串口发送 {count} 字节")
 
     def _on_serial_data(self, data: bytes) -> None:
-        body = format_payload(data, self.serial_hex.get())
+        body = format_payload(data, self.serial_recv_hex.get())
         self.after(0, lambda: self._append_text(self.serial_recv, body))
 
     def _on_serial_error(self, exc: Exception) -> None:

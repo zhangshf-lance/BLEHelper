@@ -2,9 +2,9 @@
 
 这是一个 Windows 桌面调试工具，包含三个工作区：
 
-- **BLE 主设备**：扫描 BLE 设备、连接、枚举 GATT 特征、读/写特征、订阅 Notify。
+- **BLE 主设备**：扫描 BLE 设备、连接、枚举 GATT 特征、读/写特征、订阅 Notify，可分别选择发送/接收为字符串或 HEX。
 - **BLE 从设备**：创建 Nordic UART 风格的 GATT Server，支持 RX 写入和 TX Notify，可分别选择发送/接收为字符串或 HEX。
-- **串口通信**：打开 COM 口、收发文本或 HEX 数据，支持普通串口和系统映射出来的蓝牙 SPP 虚拟串口。
+- **串口通信**：打开 COM 口、收发文本或 HEX 数据，支持普通串口和系统映射出来的蓝牙 SPP 虚拟串口，可分别选择发送/接收为字符串或 HEX。
 
 ## 运行
 
@@ -21,7 +21,7 @@ run_admin.bat
 已打包版本位于：
 
 ```text
-dist\BLEAssistant.exe
+dist\BLEAssistant_v2.exe
 ```
 
 打包后的 EXE 需要管理员方式启动时可运行：
@@ -47,7 +47,7 @@ python app.py
    - Service：`6E400001-B5A3-F393-E0A9-E50E24DCCA9E`
    - RX 写入：`6E400002-B5A3-F393-E0A9-E50E24DCCA9E`
    - TX 通知：`6E400003-B5A3-F393-E0A9-E50E24DCCA9E`
-4. 从设备页里的“发送HEX”和“接收HEX”是独立开关。发送 HEX 时可输入 `01 02 FF` 或 `0102FF`；不勾选时按 UTF-8 字符串发送。接收 HEX 只影响显示格式。
+4. BLE 主设备、BLE 从设备、串口通信三处的“发送HEX”和“接收HEX”都是独立开关。发送 HEX 时可输入 `01 02 FF` 或 `0102FF`；不勾选时按 UTF-8 字符串发送。接收 HEX 只影响显示格式。
 
 ## 目录
 
