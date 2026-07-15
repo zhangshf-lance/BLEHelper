@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 import winreg
 from dataclasses import dataclass
 
@@ -22,7 +21,7 @@ class BluetoothAdapter:
     description: str
 
 
-def set_system_bluetooth_name(name: str) -> BluetoothNameResult:
+def set_system_bluetooth_name(name: str, restart_devices: bool = False) -> BluetoothNameResult:
     clean_name = name.strip()
     if not clean_name:
         return BluetoothNameResult(False, "系统蓝牙名称为空，已跳过覆盖")
@@ -43,11 +42,16 @@ def set_system_bluetooth_name(name: str) -> BluetoothNameResult:
             failures.append(f"{adapter.instance_id}: 写入失败 {exc}")
             continue
 
-        restart_message = _restart_device(adapter.instance_id)
+        if restart_devices:
+            restart_message = _restart_device(adapter.instance_id)
+        else:
+            restart_message = "已写入，未自动重启蓝牙适配器"
         successes.append(f"{adapter.instance_id}: {restart_message}")
 
     if successes:
         message = f"已写入系统蓝牙名称：{clean_name}；" + "；".join(successes)
+        if not restart_devices:
+            message += "；扫描名称可能需要手动关闭/开启蓝牙或重启电脑后生效"
         if failures:
             message += "；部分适配器失败：" + "；".join(failures)
         return BluetoothNameResult(True, message)
@@ -129,6 +133,8 @@ def _write_local_name(adapter_registry_path: str, name: str) -> None:
 
 
 def _restart_device(instance_id: str) -> str:
+    import subprocess
+
     try:
         completed = subprocess.run(
             ["pnputil", "/restart-device", instance_id],

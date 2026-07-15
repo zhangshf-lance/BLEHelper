@@ -119,7 +119,7 @@ class BlePeripheral:
         self._name_status = name_result.message
         self.on_log(name_result.message)
 
-        server = await self._create_server(
+        server = await self._create_server_with_retry(
             BlessServer,
             GATTAttributePermissions,
             GATTCharacteristicProperties,
@@ -136,7 +136,7 @@ class BlePeripheral:
             if getattr(server, "_name_overwrite", False):
                 self.on_log(f"BLE 适配器名称覆盖失败，回退普通模式：{exc}")
                 await self._stop_async()
-                server = await self._create_server(
+                server = await self._create_server_with_retry(
                     BlessServer,
                     GATTAttributePermissions,
                     GATTCharacteristicProperties,
@@ -156,6 +156,41 @@ class BlePeripheral:
             True,
             f"BLE 从设备已广播 Service UUID：{service_uuid}；{name_hint}",
         )
+
+    async def _create_server_with_retry(
+        self,
+        server_class,
+        permissions_class,
+        properties_class,
+        device_name: str,
+        service_uuid: str,
+        rx_uuid: str,
+        tx_uuid: str,
+        overwrite_name: bool,
+    ):
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                return await self._create_server(
+                    server_class,
+                    permissions_class,
+                    properties_class,
+                    device_name,
+                    service_uuid,
+                    rx_uuid,
+                    tx_uuid,
+                    overwrite_name,
+                )
+            except RuntimeError as exc:
+                last_error = exc
+                if "Failed to create GATT service provider" not in str(exc):
+                    raise
+                self.on_log(f"创建 GATT Service Provider 失败，{attempt}/3，等待蓝牙栈恢复后重试")
+                await asyncio.sleep(1.5)
+        raise RuntimeError(
+            "Failed to create GATT service provider；请确认蓝牙已开启、没有其它程序正在占用相同 Service UUID，"
+            "如刚修改过系统蓝牙名称请先关闭/开启蓝牙后重试"
+        ) from last_error
 
     async def _create_server(
         self,
