@@ -6,6 +6,8 @@ import threading
 from dataclasses import dataclass
 from typing import Callable
 
+from .bluetooth_name import set_system_bluetooth_name
+
 
 DEFAULT_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E"
 DEFAULT_RX_UUID = "6E400002-B5A3-F393-E0A9-E50E24DCCA9E"
@@ -113,6 +115,10 @@ class BlePeripheral:
             return PeripheralStatus(False, f"请先安装依赖：pip install -r requirements.txt ({exc})")
 
         await self._stop_async()
+        name_result = set_system_bluetooth_name(device_name)
+        self._name_status = name_result.message
+        self.on_log(name_result.message)
+
         server = await self._create_server(
             BlessServer,
             GATTAttributePermissions,
@@ -121,7 +127,7 @@ class BlePeripheral:
             service_uuid,
             rx_uuid,
             tx_uuid,
-            overwrite_name=True,
+            overwrite_name=False,
         )
         self._server = server
         try:
@@ -162,7 +168,6 @@ class BlePeripheral:
         tx_uuid: str,
         overwrite_name: bool,
     ):
-        self._name_status = ""
         server = server_class(name=device_name, name_overwrite=overwrite_name)
         server.read_request_func = self._read_request
         server.write_request_func = self._write_request
