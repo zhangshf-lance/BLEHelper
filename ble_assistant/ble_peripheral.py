@@ -33,6 +33,8 @@ class BlePeripheral:
         self._device_name = "BLE Debug Slave"
         self._server = None
         self._name_status = ""
+        self._connection_monitor_task = None
+        self._last_connected: bool | None = None
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._run_loop, name="ble-peripheral-loop", daemon=True
@@ -159,6 +161,7 @@ class BlePeripheral:
             else:
                 raise
         self.running = True
+        self._start_connection_monitor(server)
         name_hint = self._name_status or "未覆盖系统蓝牙名称"
         return PeripheralStatus(
             True,
@@ -226,14 +229,18 @@ class BlePeripheral:
         await server.add_new_characteristic(
             service_uuid,
             tx_uuid,
-            properties_class.read | properties_class.notify,
+            properties_class.read
+            | properties_class.notify
+            | properties_class.write
+            | properties_class.write_without_response,
             bytearray(),
-            permissions_class.readable,
+            permissions_class.readable | permissions_class.writeable,
         )
         self._attach_status_loggers(server)
         return server
 
     async def _stop_async(self) -> PeripheralStatus:
+        await self._stop_connection_monitor()
         if self._server is not None:
             await self._server.stop()
         self._server = None
@@ -275,6 +282,44 @@ class BlePeripheral:
         if was_connected is False:
             return PeripheralStatus(True, "BLE 从设备未检测到已连接主设备，已重启广播")
         return PeripheralStatus(True, "BLE 从设备已断开当前连接并恢复广播")
+
+    def _start_connection_monitor(self, server) -> None:
+        self._last_connected = None
+        if self._connection_monitor_task is not None:
+            self._connection_monitor_task.cancel()
+        self._connection_monitor_task = asyncio.create_task(
+            self._connection_monitor_loop(server)
+        )
+
+    async def _stop_connection_monitor(self) -> None:
+        task = self._connection_monitor_task
+        self._connection_monitor_task = None
+        self._last_connected = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        if task is asyncio.current_task():
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def _connection_monitor_loop(self, server) -> None:
+        try:
+            while self.running and self._server is server:
+                connected = False
+                if hasattr(server, "is_connected"):
+                    connected = bool(await server.is_connected())
+                if connected != self._last_connected:
+                    self._last_connected = connected
+                    state = "已连接/已订阅" if connected else "已断开/未订阅"
+                    self.on_log(f"BLE 从设备连接状态：{state}")
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self.on_log(f"BLE 从设备连接状态监控失败：{exc}")
 
     async def _start_server(self, server, use_parameters: bool) -> None:
         from winrt.windows.devices.bluetooth.genericattributeprofile import (
@@ -343,6 +388,26 @@ class BlePeripheral:
             except Exception as exc:
                 self.on_log(f"BLE GATT 广播事件监听失败：{exc}")
 
+            for characteristic in getattr(service, "characteristics", ()):
+                gatt_characteristic = getattr(characteristic, "obj", None)
+                if gatt_characteristic is None:
+                    continue
+                uuid = str(getattr(characteristic, "uuid", ""))
+                try:
+                    gatt_characteristic.add_subscribed_clients_changed(
+                        lambda sender, _args, char_uuid=uuid: self._log_subscription_change(
+                            sender, char_uuid
+                        )
+                    )
+                except Exception as exc:
+                    self.on_log(f"BLE 从设备订阅事件监听失败：{uuid}，{exc}")
+
+    def _log_subscription_change(self, sender, char_uuid: str) -> None:
+        clients = getattr(sender, "subscribed_clients", None)
+        count = len(list(clients)) if clients is not None else 0
+        state = "已连接/已订阅" if count else "已断开/已取消订阅"
+        self.on_log(f"BLE 从设备连接状态：{state}，UUID={char_uuid}，订阅数={count}")
+
     def _is_advertising(self) -> bool:
         server = self._server
         if server is None:
@@ -387,7 +452,8 @@ class BlePeripheral:
                 target = self._server.get_characteristic(uuid)
             if target is not None:
                 target.value = bytearray(data)
-            if uuid.lower() == self._rx_uuid.lower():
+            self.on_log(f"BLE 从设备收到写入 {len(data)} 字节，UUID={uuid}")
+            if uuid.lower() in (self._rx_uuid.lower(), self._tx_uuid.lower()):
                 self.on_log(f"BLE 从设备收到写入 {len(data)} 字节")
                 self.on_rx(data)
         except Exception as exc:
