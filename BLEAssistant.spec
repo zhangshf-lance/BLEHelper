@@ -31,7 +31,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='BLEAssistant_v2',
+    name='BLEAssistant',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

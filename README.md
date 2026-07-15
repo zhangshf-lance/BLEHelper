@@ -21,7 +21,7 @@ run_admin.bat
 已打包版本位于：
 
 ```text
-dist\BLEAssistant_v2.exe
+dist\BLEAssistant.exe
 ```
 
 打包版本已内置工具图标，窗口标题栏和 Windows 文件图标会使用同一套 `assets\app_icon.ico`。
