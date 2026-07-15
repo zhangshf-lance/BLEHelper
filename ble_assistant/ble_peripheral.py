@@ -219,7 +219,7 @@ class BlePeripheral:
         await server.add_new_characteristic(
             service_uuid,
             rx_uuid,
-            properties_class.write,
+            properties_class.write | properties_class.write_without_response,
             bytearray(),
             permissions_class.writeable,
         )
@@ -379,11 +379,17 @@ class BlePeripheral:
         return value if value is not None else bytearray()
 
     def _write_request(self, characteristic, value, **_kwargs):
-        characteristic.value = value
         try:
-            uuid = str(getattr(characteristic, "uuid", ""))
+            uuid = str(getattr(characteristic, "uuid", characteristic))
+            data = bytes(value)
+            target = None
+            if self._server is not None and hasattr(self._server, "get_characteristic"):
+                target = self._server.get_characteristic(uuid)
+            if target is not None:
+                target.value = bytearray(data)
             if uuid.lower() == self._rx_uuid.lower():
-                self.on_rx(bytes(value))
+                self.on_log(f"BLE 从设备收到写入 {len(data)} 字节")
+                self.on_rx(data)
         except Exception as exc:
             self.on_log(f"BLE 从设备写入回调失败：{exc}")
 

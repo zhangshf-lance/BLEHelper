@@ -51,6 +51,7 @@ python app.py
    - TX 通知：`6E400003-B5A3-F393-E0A9-E50E24DCCA9E`
 4. BLE 主设备、BLE 从设备、串口通信三处的“发送HEX”和“接收HEX”都是独立开关。发送 HEX 时可输入 `01 02 FF` 或 `0102FF`；不勾选时按 UTF-8 字符串发送。接收 HEX 只影响显示格式。
 5. BLE 从设备页的“断开连接”会短暂停止 GATT 服务并按当前配置恢复广播，用于主动断开已连接的主设备。
+6. BLE 从设备接收主设备回复时，请让主设备写入 RX UUID `6E400002-B5A3-F393-E0A9-E50E24DCCA9E`；该特征同时支持 write 和 write without response。
 
 ## 目录
 
