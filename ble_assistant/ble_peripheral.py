@@ -98,6 +98,14 @@ class BlePeripheral:
         except Exception as exc:
             return PeripheralStatus(False, f"BLE 从设备通知失败：{exc}")
 
+    def disconnect(self) -> PeripheralStatus:
+        if not self.running or self._server is None:
+            return PeripheralStatus(False, "BLE 从设备未运行，无连接可断开")
+        try:
+            return self._submit(self._disconnect_async()).result(timeout=20)
+        except Exception as exc:
+            return PeripheralStatus(False, f"BLE 从设备断开连接失败：{exc}")
+
     async def _start_async(
         self,
         device_name: str,
@@ -246,6 +254,27 @@ class BlePeripheral:
             return PeripheralStatus(False, "BLE 从设备通知失败：未找到 TX 特征")
         self.on_log(f"BLE 从设备通知 {len(data)} 字节")
         return PeripheralStatus(True, "通知已发送")
+
+    async def _disconnect_async(self) -> PeripheralStatus:
+        was_connected: bool | None = None
+        if self._server is not None and hasattr(self._server, "is_connected"):
+            try:
+                was_connected = await self._server.is_connected()
+            except Exception as exc:
+                self.on_log(f"BLE 从设备连接状态读取失败：{exc}")
+
+        device_name = self._device_name
+        service_uuid = self._service_uuid
+        rx_uuid = self._rx_uuid
+        tx_uuid = self._tx_uuid
+        await self._stop_async()
+        await asyncio.sleep(0.5)
+        status = await self._start_async(device_name, service_uuid, rx_uuid, tx_uuid)
+        if not status.running:
+            return PeripheralStatus(False, f"BLE 从设备已断开，但恢复广播失败：{status.message}")
+        if was_connected is False:
+            return PeripheralStatus(True, "BLE 从设备未检测到已连接主设备，已重启广播")
+        return PeripheralStatus(True, "BLE 从设备已断开当前连接并恢复广播")
 
     async def _start_server(self, server, use_parameters: bool) -> None:
         from winrt.windows.devices.bluetooth.genericattributeprofile import (

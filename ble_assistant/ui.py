@@ -277,6 +277,10 @@ class BleAssistantApp(tk.Tk):
             buttons, text="停止", command=self._peripheral_stop
         )
         self.peripheral_stop_button.pack(side="left", padx=6)
+        self.peripheral_disconnect_button = ttk.Button(
+            buttons, text="断开连接", command=self._peripheral_disconnect
+        )
+        self.peripheral_disconnect_button.pack(side="left", padx=6)
         self.peripheral_send_hex = tk.BooleanVar(value=False)
         self.peripheral_recv_hex = tk.BooleanVar(value=False)
         ttk.Checkbutton(buttons, text="发送HEX", variable=self.peripheral_send_hex).pack(
@@ -535,6 +539,13 @@ class BleAssistantApp(tk.Tk):
             self._apply_peripheral_status,
         )
 
+    def _peripheral_disconnect(self) -> None:
+        self._run_peripheral_task(
+            "正在断开连接...",
+            self.peripheral.disconnect,
+            self._apply_peripheral_status,
+        )
+
     def _peripheral_notify(self) -> None:
         try:
             data = encode_payload(self.peripheral_send_text.get(), self.peripheral_send_hex.get(), "none")
@@ -568,6 +579,7 @@ class BleAssistantApp(tk.Tk):
         for button in (
             self.peripheral_start_button,
             self.peripheral_stop_button,
+            self.peripheral_disconnect_button,
             self.peripheral_notify_button,
         ):
             button.config(state=state)
