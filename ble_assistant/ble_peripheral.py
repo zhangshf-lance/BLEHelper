@@ -30,7 +30,7 @@ class BlePeripheral:
         self._service_uuid = DEFAULT_SERVICE_UUID
         self._rx_uuid = DEFAULT_RX_UUID
         self._tx_uuid = DEFAULT_TX_UUID
-        self._device_name = "BLE Debug Slave"
+        self._device_name = "BLE_ZHANGSHF"
         self._server = None
         self._name_status = ""
         self._connection_monitor_task = None

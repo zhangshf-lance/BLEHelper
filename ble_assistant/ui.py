@@ -257,7 +257,7 @@ class BleAssistantApp(tk.Tk):
         form = ttk.LabelFrame(tab, text="BLE GATT 从设备")
         form.grid(row=0, column=0, sticky="ew")
         form.columnconfigure(1, weight=1)
-        self.peripheral_name = tk.StringVar(value="BLE Debug Slave")
+        self.peripheral_name = tk.StringVar(value="BLE_ZHANGSHF")
         self.peripheral_service = tk.StringVar(value=DEFAULT_SERVICE_UUID)
         self.peripheral_rx = tk.StringVar(value=DEFAULT_RX_UUID)
         self.peripheral_tx = tk.StringVar(value=DEFAULT_TX_UUID)
