@@ -80,18 +80,26 @@ class WifiManager:
         if password or self._is_open_network(authentication):
             if password and not 8 <= len(password) <= 63:
                 raise ValueError("STATION 密码长度必须为 8-63 个字符")
-            try:
-                outputs.append(self._add_profile(ssid, password, authentication, encryption))
-            except RuntimeError as exc:
-                if password and "wpa3" in authentication.casefold():
-                    outputs.append(
-                        f"WPA3 profile failed, retrying as WPA2PSK/AES:\n{exc}"
-                    )
-                    outputs.append(
-                        self._add_profile(ssid, password, "WPA2-Personal", encryption)
-                    )
-                else:
-                    raise
+            if self._profile_exists(ssid):
+                outputs.append(f'Profile "{ssid}" already exists; using existing profile.')
+            else:
+                try:
+                    outputs.append(self._add_profile(ssid, password, authentication, encryption))
+                except RuntimeError as exc:
+                    if self._is_profile_exists_error(str(exc)):
+                        outputs.append(
+                            f'Profile "{ssid}" already exists and cannot be overwritten; '
+                            "using existing profile."
+                        )
+                    elif password and "wpa3" in authentication.casefold():
+                        outputs.append(
+                            f"WPA3 profile failed, retrying as WPA2PSK/AES:\n{exc}"
+                        )
+                        outputs.append(
+                            self._add_profile(ssid, password, "WPA2-Personal", encryption)
+                        )
+                    else:
+                        raise
         connected = self._run("wlan", "connect", f"name={ssid}", f"ssid={ssid}")
         outputs.append(connected)
         return self._join_outputs(*outputs)
@@ -250,6 +258,22 @@ class WifiManager:
         if completed.returncode != 0:
             raise RuntimeError(output or f"netsh failed with exit code {completed.returncode}")
         return output
+
+    def _profile_exists(self, ssid: str) -> bool:
+        try:
+            self._run("wlan", "show", "profiles", f"name={ssid}")
+        except RuntimeError:
+            return False
+        return True
+
+    def _is_profile_exists_error(self, message: str) -> bool:
+        value = message.casefold()
+        return (
+            "already exists" in value
+            or "cannot be overwritten" in value
+            or "已存在" in message
+            or "不能覆盖" in message
+        )
 
     def _decode(self, data: bytes) -> str:
         if not data:
