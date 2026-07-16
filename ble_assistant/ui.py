@@ -534,6 +534,7 @@ class BleAssistantApp(tk.Tk):
             font=("Microsoft YaHei UI", 9),
         )
         self.wifi_network_list.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        self.wifi_network_list.bind("<<ListboxSelect>>", self._wifi_show_selected_network)
         self.wifi_network_list.bind("<Double-Button-1>", lambda _event: self._wifi_use_network())
         ttk.Button(networks, text="使用选中 SSID", command=self._wifi_use_network).grid(
             row=1, column=0, sticky="e", padx=8, pady=(0, 8)
@@ -959,12 +960,26 @@ class BleAssistantApp(tk.Tk):
         )
 
     def _wifi_use_network(self) -> None:
-        selection = self.wifi_network_list.curselection()
-        if not selection:
+        network = self._selected_wifi_network()
+        if network is None:
             messagebox.showinfo("选择 WiFi", "请先选择一个 WiFi 网络")
             return
-        network = self.wifi_networks[selection[0]]
         self.station_ssid.set(network.ssid)
+        self._show_wifi_network_details(network)
+
+    def _wifi_show_selected_network(self, _event=None) -> None:
+        network = self._selected_wifi_network()
+        if network is not None:
+            self._show_wifi_network_details(network)
+
+    def _selected_wifi_network(self) -> WifiNetwork | None:
+        selection = self.wifi_network_list.curselection()
+        if not selection:
+            return None
+        index = selection[0]
+        if index < 0 or index >= len(self.wifi_networks):
+            return None
+        return self.wifi_networks[index]
 
     def _run_wifi_task(self, busy_text: str, action, callback) -> None:
         self._set_wifi_busy(True, busy_text)
@@ -983,7 +998,7 @@ class BleAssistantApp(tk.Tk):
         callback(result)
 
     def _wifi_station_scan_done(self, result) -> None:
-        networks, output = result
+        networks, _output = result
         self.wifi_networks = networks
         self.wifi_network_list.delete(0, "end")
         for network in networks:
@@ -1000,7 +1015,11 @@ class BleAssistantApp(tk.Tk):
             suffix = f" | {meta}" if meta else ""
             self.wifi_network_list.insert("end", f"{network.ssid}{suffix}")
         self.station_status.config(text=f"发现 {len(networks)} 个网络")
-        self._append_wifi_output(output)
+        self._clear_text(self.wifi_output)
+        if networks:
+            self.wifi_network_list.selection_set(0)
+            self.wifi_network_list.activate(0)
+            self._show_wifi_network_details(networks[0])
         self.log(f"WiFi STATION 扫描完成：{len(networks)} 个网络")
 
     def _wifi_task_success(self, status: str, output: str) -> None:
@@ -1008,12 +1027,14 @@ class BleAssistantApp(tk.Tk):
             self.hostap_status.config(text=status)
         elif status.startswith("STATION"):
             self.station_status.config(text=status)
-        self._append_wifi_output(output)
+        if output:
+            first_line = output.splitlines()[0] if output.splitlines() else output
+            self.log(f"{status}: {first_line}")
         self.log(status)
 
-    def _append_wifi_output(self, output: str) -> None:
-        timestamp = _dt.datetime.now().strftime("%H:%M:%S")
-        self._append_text(self.wifi_output, f"[{timestamp}]\n{output.strip()}\n\n")
+    def _show_wifi_network_details(self, network: WifiNetwork) -> None:
+        self._clear_text(self.wifi_output)
+        self._append_text(self.wifi_output, self.wifi.format_network_details(network) + "\n")
 
     def _set_wifi_busy(self, busy: bool, text: str | None = None) -> None:
         state = "disabled" if busy else "normal"
