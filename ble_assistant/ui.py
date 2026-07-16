@@ -219,6 +219,9 @@ class BleAssistantApp(tk.Tk):
         self.ble_char_var = tk.StringVar()
         self.ble_char_combo = ttk.Combobox(char_frame, textvariable=self.ble_char_var, state="readonly")
         self.ble_char_combo.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=8)
+        ttk.Button(char_frame, text="刷新特征", command=self._ble_refresh_characteristics).grid(
+            row=0, column=2, padx=(0, 8), pady=8
+        )
 
         options = ttk.Frame(right)
         options.grid(row=1, column=0, sticky="ew", pady=8)
@@ -596,13 +599,19 @@ class BleAssistantApp(tk.Tk):
     def _ble_connected(self, characteristics: list[GattCharacteristic]) -> None:
         self.ble_characteristics = characteristics
         values = [
-            f"{char.uuid} | {','.join(char.properties)} | {char.description}"
+            f"{char.uuid} | {','.join(char.properties)} | Service {char.service_uuid}"
             for char in characteristics
         ]
         self.ble_char_combo.config(values=values)
         if values:
             self.ble_char_combo.current(0)
         self.ble_status.config(text=f"已连接，{len(values)} 个特征")
+
+    def _ble_refresh_characteristics(self) -> None:
+        self._stop_loop_send("ble", False)
+        self.ble_status.config(text="正在刷新 GATT 特征...")
+        future = self.central.submit(self.central.refresh_characteristics())
+        self._future_result(future, self._ble_connected, "BLE 刷新特征失败")
 
     def _ble_disconnect(self) -> None:
         self._stop_loop_send("ble", False)

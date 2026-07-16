@@ -19,6 +19,8 @@ class GattCharacteristic:
     uuid: str
     description: str
     properties: tuple[str, ...]
+    service_uuid: str = ""
+    service_description: str = ""
 
 
 class MissingBleak(RuntimeError):
@@ -40,6 +42,7 @@ class BleCentral:
         self._thread.start()
         self._client = None
         self._device_address: str | None = None
+        self._device_target: object | None = None
         self._devices_by_address: dict[str, object] = {}
 
     @staticmethod
@@ -86,11 +89,33 @@ class BleCentral:
 
         await self.disconnect()
         target = self._devices_by_address.get(address, address)
-        self._client = BleakClient(target, timeout=30)
+        self._device_target = target
+        self._client = self._make_client(BleakClient, target)
         await self._client.connect()
         self._device_address = address
         self.on_log(f"已连接 BLE 设备：{address}")
         return await self.characteristics()
+
+    async def refresh_characteristics(self) -> list[GattCharacteristic]:
+        try:
+            from bleak import BleakClient
+        except Exception as exc:
+            raise MissingBleak("请先安装 bleak：pip install -r requirements.txt") from exc
+
+        if self._device_address is None:
+            raise RuntimeError("BLE 主设备未连接")
+        address = self._device_address
+        target = self._device_target or self._devices_by_address.get(address, address)
+        await self.disconnect()
+        self._device_target = target
+        self._client = self._make_client(BleakClient, target)
+        await self._client.connect()
+        self._device_address = address
+        self.on_log("已按未缓存方式刷新 GATT 服务")
+        return await self.characteristics()
+
+    def _make_client(self, client_class, target):
+        return client_class(target, timeout=30, winrt={"use_cached_services": False})
 
     async def disconnect(self) -> None:
         if self._client is not None:
@@ -100,20 +125,30 @@ class BleCentral:
             finally:
                 self._client = None
                 self._device_address = None
+                self._device_target = None
 
     async def characteristics(self) -> list[GattCharacteristic]:
         client = self._require_client()
         services = client.services
         rows: list[GattCharacteristic] = []
+        service_count = 0
+        descriptor_count = 0
         for service in services:
+            service_count += 1
             for char in service.characteristics:
+                descriptor_count += len(getattr(char, "descriptors", ()) or ())
                 rows.append(
                     GattCharacteristic(
                         uuid=str(char.uuid),
                         description=getattr(char, "description", "") or str(service.uuid),
                         properties=tuple(char.properties),
+                        service_uuid=str(service.uuid),
+                        service_description=getattr(service, "description", "") or "",
                     )
                 )
+        self.on_log(
+            f"GATT 服务发现完成：{service_count} 个服务，{len(rows)} 个特征，{descriptor_count} 个描述符"
+        )
         return rows
 
     async def read(self, characteristic_uuid: str) -> bytes:
