@@ -23,6 +23,7 @@ from .serial_win import (
     format_payload,
     list_serial_ports,
 )
+from .wifi_win import WifiManager, WifiNetwork
 
 
 def _resource_path(*parts: str) -> Path:
@@ -40,7 +41,7 @@ class BleAssistantApp(tk.Tk):
 
     def __init__(self) -> None:
         super().__init__()
-        self.title("Windows 蓝牙调试助手")
+        self.title("嵌入式调试助手")
         self.geometry("1180x800")
         self.minsize(1040, 700)
         self.configure(background=self.BG)
@@ -48,15 +49,17 @@ class BleAssistantApp(tk.Tk):
 
         self.central = BleCentral(self.log, self._on_ble_notification)
         self.peripheral = BlePeripheral(self.log, self._on_peripheral_rx)
+        self.wifi = WifiManager()
         self.serial_port: WindowsSerialPort | None = None
         self.ble_devices: list[BleDevice] = []
         self.ble_characteristics: list[GattCharacteristic] = []
+        self.wifi_networks: list[WifiNetwork] = []
         self._loop_send_after_ids: dict[str, str | None] = {
             "ble": None,
             "peripheral": None,
             "serial": None,
         }
-        self.worker_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ui-worker")
+        self.worker_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ui-worker")
 
         self._build_style()
         self._build()
@@ -142,12 +145,12 @@ class BleAssistantApp(tk.Tk):
         header = ttk.Frame(self, style="Header.TFrame")
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(0, weight=1)
-        ttk.Label(header, text="Windows 蓝牙调试助手", style="HeaderTitle.TLabel").grid(
+        ttk.Label(header, text="嵌入式调试助手", style="HeaderTitle.TLabel").grid(
             row=0, column=0, sticky="w", padx=18, pady=(14, 2)
         )
         ttk.Label(
             header,
-            text="BLE 主设备、BLE GATT 从设备、串口通信一体化调试",
+            text="BLE 主设备、BLE GATT 从设备、串口、WiFi HOSTAP/STATION 一体化调试",
             style="HeaderSub.TLabel",
         ).grid(row=1, column=0, sticky="w", padx=18, pady=(0, 14))
 
@@ -157,16 +160,19 @@ class BleAssistantApp(tk.Tk):
         self.ble_tab = ttk.Frame(notebook)
         self.peripheral_tab = ttk.Frame(notebook)
         self.serial_tab = ttk.Frame(notebook)
+        self.wifi_tab = ttk.Frame(notebook)
         self.log_tab = ttk.Frame(notebook)
 
         notebook.add(self.ble_tab, text="BLE 主设备")
         notebook.add(self.peripheral_tab, text="BLE 从设备")
         notebook.add(self.serial_tab, text="串口通信")
+        notebook.add(self.wifi_tab, text="WiFi 调试")
         notebook.add(self.log_tab, text="运行日志")
 
         self._build_ble_tab()
         self._build_peripheral_tab()
         self._build_serial_tab()
+        self._build_wifi_tab()
         self._build_log_tab()
         self._style_text_widgets()
 
@@ -432,6 +438,119 @@ class BleAssistantApp(tk.Tk):
             serial_loop, text="停止循环", command=lambda: self._stop_loop_send("serial")
         ).pack(side="left", padx=6)
 
+    def _build_wifi_tab(self) -> None:
+        tab = self.wifi_tab
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+
+        top = ttk.PanedWindow(tab, orient=tk.HORIZONTAL)
+        top.grid(row=0, column=0, sticky="ew")
+
+        hostap = ttk.LabelFrame(top, text="HOSTAP")
+        hostap.columnconfigure(1, weight=1)
+        self.hostap_ssid = tk.StringVar(value="EmbeddedDebugAP")
+        self.hostap_password = tk.StringVar(value="12345678")
+        ttk.Label(hostap, text="SSID").grid(row=0, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(hostap, textvariable=self.hostap_ssid).grid(
+            row=0, column=1, sticky="ew", padx=(0, 8), pady=6
+        )
+        ttk.Label(hostap, text="密码").grid(row=1, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(hostap, textvariable=self.hostap_password, show="*").grid(
+            row=1, column=1, sticky="ew", padx=(0, 8), pady=6
+        )
+        hostap_buttons = ttk.Frame(hostap)
+        hostap_buttons.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
+        self.hostap_start_button = ttk.Button(
+            hostap_buttons,
+            text="启动 HOSTAP",
+            command=self._wifi_hostap_start,
+            style="Accent.TButton",
+        )
+        self.hostap_start_button.pack(side="left")
+        self.hostap_stop_button = ttk.Button(
+            hostap_buttons, text="停止", command=self._wifi_hostap_stop
+        )
+        self.hostap_stop_button.pack(side="left", padx=6)
+        self.hostap_status_button = ttk.Button(
+            hostap_buttons, text="状态", command=self._wifi_hostap_status
+        )
+        self.hostap_status_button.pack(side="left")
+        self.hostap_status = ttk.Label(hostap_buttons, text="未启动", style="Status.TLabel")
+        self.hostap_status.pack(side="left", padx=12)
+
+        station = ttk.LabelFrame(top, text="STATION")
+        station.columnconfigure(1, weight=1)
+        self.station_ssid = tk.StringVar()
+        self.station_password = tk.StringVar()
+        ttk.Label(station, text="SSID").grid(row=0, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(station, textvariable=self.station_ssid).grid(
+            row=0, column=1, sticky="ew", padx=(0, 8), pady=6
+        )
+        ttk.Label(station, text="密码").grid(row=1, column=0, sticky="w", padx=8, pady=6)
+        ttk.Entry(station, textvariable=self.station_password, show="*").grid(
+            row=1, column=1, sticky="ew", padx=(0, 8), pady=6
+        )
+        station_buttons = ttk.Frame(station)
+        station_buttons.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=8)
+        self.station_scan_button = ttk.Button(
+            station_buttons, text="扫描", command=self._wifi_station_scan, style="Accent.TButton"
+        )
+        self.station_scan_button.pack(side="left")
+        self.station_connect_button = ttk.Button(
+            station_buttons, text="连接", command=self._wifi_station_connect, style="Accent.TButton"
+        )
+        self.station_connect_button.pack(side="left", padx=6)
+        self.station_disconnect_button = ttk.Button(
+            station_buttons, text="断开", command=self._wifi_station_disconnect
+        )
+        self.station_disconnect_button.pack(side="left")
+        self.station_status_button = ttk.Button(
+            station_buttons, text="状态", command=self._wifi_station_status
+        )
+        self.station_status_button.pack(side="left", padx=6)
+        self.station_status = ttk.Label(station_buttons, text="未连接", style="Status.TLabel")
+        self.station_status.pack(side="left", padx=12)
+
+        top.add(hostap, weight=1)
+        top.add(station, weight=1)
+
+        lower = ttk.PanedWindow(tab, orient=tk.HORIZONTAL)
+        lower.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+
+        networks = ttk.LabelFrame(lower, text="STATION 扫描结果")
+        networks.rowconfigure(0, weight=1)
+        networks.columnconfigure(0, weight=1)
+        self.wifi_network_list = tk.Listbox(
+            networks,
+            activestyle="dotbox",
+            exportselection=False,
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground=self.BORDER,
+            selectbackground=self.ACCENT,
+            selectforeground="#ffffff",
+            background=self.TEXT_BG,
+            foreground=self.TEXT,
+            font=("Microsoft YaHei UI", 9),
+        )
+        self.wifi_network_list.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        self.wifi_network_list.bind("<Double-Button-1>", lambda _event: self._wifi_use_network())
+        ttk.Button(networks, text="使用选中 SSID", command=self._wifi_use_network).grid(
+            row=1, column=0, sticky="e", padx=8, pady=(0, 8)
+        )
+
+        output = ttk.LabelFrame(lower, text="WiFi 输出")
+        output.rowconfigure(0, weight=1)
+        output.columnconfigure(0, weight=1)
+        self.wifi_output = ScrolledText(output, height=16, wrap="word")
+        self.wifi_output.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        ttk.Button(output, text="清除输出", command=lambda: self._clear_text(self.wifi_output)).grid(
+            row=1, column=0, sticky="e", padx=8, pady=(0, 8)
+        )
+
+        lower.add(networks, weight=1)
+        lower.add(output, weight=2)
+
     def _build_log_tab(self) -> None:
         self.log_tab.columnconfigure(0, weight=1)
         self.log_tab.rowconfigure(1, weight=1)
@@ -444,7 +563,13 @@ class BleAssistantApp(tk.Tk):
         self.log_text.grid(row=1, column=0, sticky="nsew", padx=8, pady=8)
 
     def _style_text_widgets(self) -> None:
-        for widget in (self.ble_recv, self.peripheral_recv, self.serial_recv, self.log_text):
+        for widget in (
+            self.ble_recv,
+            self.peripheral_recv,
+            self.serial_recv,
+            self.wifi_output,
+            self.log_text,
+        ):
             widget.configure(
                 background=self.TEXT_BG,
                 foreground=self.TEXT,
@@ -779,6 +904,134 @@ class BleAssistantApp(tk.Tk):
     def _on_peripheral_rx(self, data: bytes) -> None:
         body = format_payload(data, self.peripheral_recv_hex.get())
         self.after(0, lambda: self._append_text(self.peripheral_recv, f"RX: {body}\n"))
+
+    def _wifi_hostap_start(self) -> None:
+        ssid = self.hostap_ssid.get()
+        password = self.hostap_password.get()
+        self._run_wifi_task(
+            "HOSTAP 启动中...",
+            lambda: self.wifi.hostap_start(ssid, password),
+            lambda output: self._wifi_task_success("HOSTAP 已启动", output),
+        )
+
+    def _wifi_hostap_stop(self) -> None:
+        self._run_wifi_task(
+            "HOSTAP 停止中...",
+            self.wifi.hostap_stop,
+            lambda output: self._wifi_task_success("HOSTAP 已停止", output),
+        )
+
+    def _wifi_hostap_status(self) -> None:
+        self._run_wifi_task(
+            "HOSTAP 状态查询中...",
+            self.wifi.hostap_status,
+            lambda output: self._wifi_task_success("HOSTAP 状态已更新", output),
+        )
+
+    def _wifi_station_scan(self) -> None:
+        self._run_wifi_task(
+            "STATION 扫描中...",
+            self.wifi.station_scan,
+            self._wifi_station_scan_done,
+        )
+
+    def _wifi_station_connect(self) -> None:
+        ssid = self.station_ssid.get()
+        password = self.station_password.get()
+        self._run_wifi_task(
+            "STATION 连接中...",
+            lambda: self.wifi.station_connect(ssid, password),
+            lambda output: self._wifi_task_success("STATION 已发起连接", output),
+        )
+
+    def _wifi_station_disconnect(self) -> None:
+        self._run_wifi_task(
+            "STATION 断开中...",
+            self.wifi.station_disconnect,
+            lambda output: self._wifi_task_success("STATION 已断开", output),
+        )
+
+    def _wifi_station_status(self) -> None:
+        self._run_wifi_task(
+            "STATION 状态查询中...",
+            self.wifi.station_status,
+            lambda output: self._wifi_task_success("STATION 状态已更新", output),
+        )
+
+    def _wifi_use_network(self) -> None:
+        selection = self.wifi_network_list.curselection()
+        if not selection:
+            messagebox.showinfo("选择 WiFi", "请先选择一个 WiFi 网络")
+            return
+        network = self.wifi_networks[selection[0]]
+        self.station_ssid.set(network.ssid)
+
+    def _run_wifi_task(self, busy_text: str, action, callback) -> None:
+        self._set_wifi_busy(True, busy_text)
+        future = self.worker_pool.submit(action)
+        future.add_done_callback(
+            lambda done_future: self.after(0, lambda: self._wifi_task_done(done_future, callback))
+        )
+
+    def _wifi_task_done(self, future: Future, callback) -> None:
+        self._set_wifi_busy(False)
+        try:
+            result = future.result()
+        except Exception as exc:
+            self._show_error("WiFi 操作失败", exc)
+            return
+        callback(result)
+
+    def _wifi_station_scan_done(self, result) -> None:
+        networks, output = result
+        self.wifi_networks = networks
+        self.wifi_network_list.delete(0, "end")
+        for network in networks:
+            meta = " | ".join(
+                item
+                for item in (
+                    network.signal,
+                    network.authentication,
+                    network.encryption,
+                    f"BSSID {network.bssid_count}" if network.bssid_count else "",
+                )
+                if item
+            )
+            suffix = f" | {meta}" if meta else ""
+            self.wifi_network_list.insert("end", f"{network.ssid}{suffix}")
+        self.station_status.config(text=f"发现 {len(networks)} 个网络")
+        self._append_wifi_output(output)
+        self.log(f"WiFi STATION 扫描完成：{len(networks)} 个网络")
+
+    def _wifi_task_success(self, status: str, output: str) -> None:
+        if status.startswith("HOSTAP"):
+            self.hostap_status.config(text=status)
+        elif status.startswith("STATION"):
+            self.station_status.config(text=status)
+        self._append_wifi_output(output)
+        self.log(status)
+
+    def _append_wifi_output(self, output: str) -> None:
+        timestamp = _dt.datetime.now().strftime("%H:%M:%S")
+        self._append_text(self.wifi_output, f"[{timestamp}]\n{output.strip()}\n\n")
+
+    def _set_wifi_busy(self, busy: bool, text: str | None = None) -> None:
+        state = "disabled" if busy else "normal"
+        for button in (
+            self.hostap_start_button,
+            self.hostap_stop_button,
+            self.hostap_status_button,
+            self.station_scan_button,
+            self.station_connect_button,
+            self.station_disconnect_button,
+            self.station_status_button,
+        ):
+            button.config(state=state)
+        if text:
+            if text.startswith("HOSTAP"):
+                self.hostap_status.config(text=text)
+            elif text.startswith("STATION"):
+                self.station_status.config(text=text)
 
     def _refresh_serial_ports(self) -> None:
         ports = list_serial_ports()
