@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import json
 import sys
 import tkinter.font as tkfont
 import tkinter as tk
@@ -54,6 +55,10 @@ class BleAssistantApp(tk.Tk):
         self.ble_devices: list[BleDevice] = []
         self.ble_characteristics: list[GattCharacteristic] = []
         self.wifi_networks: list[WifiNetwork] = []
+        self.serial_commands: list[dict[str, object]] = []
+        self.serial_sequence_after_id: str | None = None
+        self.serial_sequence_index = 0
+        self.serial_sequence_items: list[dict[str, object]] = []
         self._loop_send_after_ids: dict[str, str | None] = {
             "ble": None,
             "peripheral": None,
@@ -366,7 +371,8 @@ class BleAssistantApp(tk.Tk):
     def _build_serial_tab(self) -> None:
         tab = self.serial_tab
         tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(2, weight=1)
+        tab.rowconfigure(2, weight=2)
+        tab.rowconfigure(4, weight=1)
 
         toolbar = ttk.Frame(tab)
         toolbar.grid(row=0, column=0, sticky="ew")
@@ -437,6 +443,104 @@ class BleAssistantApp(tk.Tk):
         ttk.Button(
             serial_loop, text="停止循环", command=lambda: self._stop_loop_send("serial")
         ).pack(side="left", padx=6)
+
+        multi = ttk.LabelFrame(tab, text="多条字符串顺序发送")
+        multi.grid(row=4, column=0, sticky="nsew", pady=(8, 0))
+        multi.columnconfigure(0, weight=1)
+        multi.rowconfigure(0, weight=1)
+
+        columns = ("enabled", "order", "command", "comment", "delay")
+        self.serial_command_tree = ttk.Treeview(
+            multi,
+            columns=columns,
+            show="headings",
+            height=8,
+            selectmode="browse",
+        )
+        headings = {
+            "enabled": "启用",
+            "order": "顺序",
+            "command": "字符串",
+            "comment": "注释",
+            "delay": "延时(ms)",
+        }
+        widths = {
+            "enabled": 54,
+            "order": 54,
+            "command": 420,
+            "comment": 220,
+            "delay": 80,
+        }
+        for column in columns:
+            self.serial_command_tree.heading(column, text=headings[column])
+            self.serial_command_tree.column(
+                column,
+                width=widths[column],
+                minwidth=48,
+                stretch=column in {"command", "comment"},
+                anchor="w" if column in {"command", "comment"} else "center",
+            )
+        self.serial_command_tree.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        self.serial_command_tree.bind("<<TreeviewSelect>>", self._serial_command_selected)
+        self.serial_command_tree.bind("<Double-Button-1>", lambda _event: self._serial_send_selected_command())
+        self.serial_command_tree.bind("<space>", lambda _event: self._serial_toggle_selected_command())
+        scrollbar = ttk.Scrollbar(multi, orient="vertical", command=self.serial_command_tree.yview)
+        scrollbar.grid(row=0, column=1, sticky="ns", pady=8)
+        self.serial_command_tree.configure(yscrollcommand=scrollbar.set)
+
+        editor = ttk.Frame(multi)
+        editor.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
+        editor.columnconfigure(2, weight=3)
+        editor.columnconfigure(4, weight=2)
+        self.serial_cmd_enabled = tk.BooleanVar(value=True)
+        self.serial_cmd_text = tk.StringVar()
+        self.serial_cmd_comment = tk.StringVar()
+        self.serial_cmd_delay = tk.StringVar(value="1000")
+        ttk.Checkbutton(editor, text="启用", variable=self.serial_cmd_enabled).grid(
+            row=0, column=0, padx=(0, 8)
+        )
+        ttk.Label(editor, text="字符串").grid(row=0, column=1, sticky="w")
+        ttk.Entry(editor, textvariable=self.serial_cmd_text).grid(
+            row=0, column=2, sticky="ew", padx=(6, 10)
+        )
+        ttk.Label(editor, text="注释").grid(row=0, column=3, sticky="w")
+        ttk.Entry(editor, textvariable=self.serial_cmd_comment).grid(
+            row=0, column=4, sticky="ew", padx=(6, 10)
+        )
+        ttk.Label(editor, text="延时").grid(row=0, column=5, sticky="w")
+        ttk.Entry(editor, width=8, textvariable=self.serial_cmd_delay).grid(
+            row=0, column=6, padx=(6, 10)
+        )
+
+        buttons = ttk.Frame(multi)
+        buttons.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
+        ttk.Button(buttons, text="添加", command=self._serial_add_command).pack(side="left")
+        ttk.Button(buttons, text="更新", command=self._serial_update_command).pack(side="left", padx=6)
+        ttk.Button(buttons, text="删除", command=self._serial_delete_command).pack(side="left")
+        ttk.Button(buttons, text="上移", command=lambda: self._serial_move_command(-1)).pack(
+            side="left", padx=(12, 6)
+        )
+        ttk.Button(buttons, text="下移", command=lambda: self._serial_move_command(1)).pack(side="left")
+        ttk.Button(buttons, text="发送选中", command=self._serial_send_selected_command).pack(
+            side="left", padx=(12, 6)
+        )
+        self.serial_sequence_start_button = ttk.Button(
+            buttons,
+            text="顺序发送",
+            command=self._serial_start_sequence,
+            style="Accent.TButton",
+        )
+        self.serial_sequence_start_button.pack(side="left")
+        self.serial_sequence_stop_button = ttk.Button(
+            buttons, text="停止顺序", command=self._serial_stop_sequence
+        )
+        self.serial_sequence_stop_button.pack(side="left", padx=6)
+        ttk.Button(buttons, text="保存", command=self._save_serial_commands).pack(
+            side="right", padx=(6, 0)
+        )
+        ttk.Button(buttons, text="载入", command=self._load_serial_commands).pack(side="right")
+
+        self._load_serial_commands(show_log=False)
 
     def _build_wifi_tab(self) -> None:
         tab = self.wifi_tab
@@ -1054,6 +1158,236 @@ class BleAssistantApp(tk.Tk):
             elif text.startswith("STATION"):
                 self.station_status.config(text=text)
 
+    def _serial_command_config_path(self) -> Path:
+        folder = Path.home() / "AppData" / "Roaming" / "EmbeddedDebugAssistant"
+        return folder / "serial_commands.json"
+
+    def _refresh_serial_command_tree(self, select_index: int | None = None) -> None:
+        for item in self.serial_command_tree.get_children():
+            self.serial_command_tree.delete(item)
+        for index, command in enumerate(self.serial_commands, start=1):
+            self.serial_command_tree.insert(
+                "",
+                "end",
+                values=(
+                    "√" if command.get("enabled", True) else "",
+                    index,
+                    str(command.get("command", "")),
+                    str(command.get("comment", "")),
+                    int(command.get("delay_ms", 1000)),
+                ),
+            )
+        if select_index is not None and self.serial_commands:
+            select_index = max(0, min(select_index, len(self.serial_commands) - 1))
+            item = self.serial_command_tree.get_children()[select_index]
+            self.serial_command_tree.selection_set(item)
+            self.serial_command_tree.focus(item)
+            self.serial_command_tree.see(item)
+
+    def _selected_serial_command_index(self) -> int | None:
+        selection = self.serial_command_tree.selection()
+        if not selection:
+            return None
+        children = self.serial_command_tree.get_children()
+        try:
+            return children.index(selection[0])
+        except ValueError:
+            return None
+
+    def _serial_command_selected(self, _event=None) -> None:
+        index = self._selected_serial_command_index()
+        if index is None:
+            return
+        command = self.serial_commands[index]
+        self.serial_cmd_enabled.set(bool(command.get("enabled", True)))
+        self.serial_cmd_text.set(str(command.get("command", "")))
+        self.serial_cmd_comment.set(str(command.get("comment", "")))
+        self.serial_cmd_delay.set(str(int(command.get("delay_ms", 1000))))
+
+    def _serial_command_from_editor(self) -> dict[str, object] | None:
+        text = self.serial_cmd_text.get()
+        if not text:
+            self._show_error("串口多条发送", ValueError("字符串不能为空"))
+            return None
+        try:
+            delay_ms = int(self.serial_cmd_delay.get())
+        except ValueError:
+            self._show_error("串口多条发送", ValueError("延时必须是整数毫秒"))
+            return None
+        if delay_ms < 0:
+            self._show_error("串口多条发送", ValueError("延时不能小于 0 ms"))
+            return None
+        return {
+            "enabled": self.serial_cmd_enabled.get(),
+            "command": text,
+            "comment": self.serial_cmd_comment.get(),
+            "delay_ms": delay_ms,
+        }
+
+    def _serial_add_command(self) -> None:
+        command = self._serial_command_from_editor()
+        if command is None:
+            return
+        self.serial_commands.append(command)
+        self._refresh_serial_command_tree(len(self.serial_commands) - 1)
+        self._save_serial_commands(show_log=False)
+
+    def _serial_update_command(self) -> None:
+        index = self._selected_serial_command_index()
+        if index is None:
+            messagebox.showinfo("串口多条发送", "请先选择一条记录")
+            return
+        command = self._serial_command_from_editor()
+        if command is None:
+            return
+        self.serial_commands[index] = command
+        self._refresh_serial_command_tree(index)
+        self._save_serial_commands(show_log=False)
+
+    def _serial_delete_command(self) -> None:
+        index = self._selected_serial_command_index()
+        if index is None:
+            messagebox.showinfo("串口多条发送", "请先选择一条记录")
+            return
+        del self.serial_commands[index]
+        self._refresh_serial_command_tree(index)
+        self._save_serial_commands(show_log=False)
+
+    def _serial_move_command(self, offset: int) -> None:
+        index = self._selected_serial_command_index()
+        if index is None:
+            messagebox.showinfo("串口多条发送", "请先选择一条记录")
+            return
+        target = index + offset
+        if target < 0 or target >= len(self.serial_commands):
+            return
+        self.serial_commands[index], self.serial_commands[target] = (
+            self.serial_commands[target],
+            self.serial_commands[index],
+        )
+        self._refresh_serial_command_tree(target)
+        self._save_serial_commands(show_log=False)
+
+    def _serial_toggle_selected_command(self) -> str:
+        index = self._selected_serial_command_index()
+        if index is None:
+            return "break"
+        self.serial_commands[index]["enabled"] = not bool(
+            self.serial_commands[index].get("enabled", True)
+        )
+        self._refresh_serial_command_tree(index)
+        self._save_serial_commands(show_log=False)
+        return "break"
+
+    def _save_serial_commands(self, show_log: bool = True) -> None:
+        path = self._serial_command_config_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self.serial_commands, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        if show_log:
+            self.log(f"串口多条发送配置已保存：{path}")
+
+    def _load_serial_commands(self, show_log: bool = True) -> None:
+        path = self._serial_command_config_path()
+        if not path.exists():
+            self.serial_commands = []
+            self._refresh_serial_command_tree()
+            return
+        try:
+            raw_commands = json.loads(path.read_text(encoding="utf-8"))
+            self.serial_commands = [
+                {
+                    "enabled": bool(item.get("enabled", True)),
+                    "command": str(item.get("command", "")),
+                    "comment": str(item.get("comment", "")),
+                    "delay_ms": max(0, int(item.get("delay_ms", 1000))),
+                }
+                for item in raw_commands
+                if isinstance(item, dict)
+            ]
+        except Exception as exc:
+            if hasattr(self, "log_text"):
+                self._show_error("串口多条发送载入失败", exc)
+            else:
+                messagebox.showerror("串口多条发送载入失败", str(exc))
+            self.serial_commands = []
+        self._refresh_serial_command_tree(0 if self.serial_commands else None)
+        if show_log:
+            self.log(f"串口多条发送配置已载入：{path}")
+
+    def _serial_send_selected_command(self) -> None:
+        index = self._selected_serial_command_index()
+        if index is None:
+            messagebox.showinfo("串口多条发送", "请先选择一条记录")
+            return
+        self._serial_send_command_entry(self.serial_commands[index])
+
+    def _serial_send_command_entry(self, command: dict[str, object]) -> bool:
+        if not self.serial_port:
+            messagebox.showinfo("串口未打开", "请先打开串口")
+            return False
+        text = str(command.get("command", ""))
+        try:
+            data = encode_payload(text, False, self.serial_line_ending.get())
+            count = self.serial_port.write(data)
+        except Exception as exc:
+            self._show_error("串口多条发送失败", exc)
+            return False
+        comment = str(command.get("comment", "")).strip()
+        suffix = f"（{comment}）" if comment else ""
+        self.log(f"串口多条发送：{text}{suffix}，{count} 字节")
+        return True
+
+    def _serial_start_sequence(self) -> None:
+        if self.serial_sequence_after_id is not None:
+            self.log("串口顺序发送已在运行")
+            return
+        if not self.serial_port:
+            messagebox.showinfo("串口未打开", "请先打开串口")
+            return
+        self.serial_sequence_items = [
+            command
+            for command in self.serial_commands
+            if command.get("enabled", True) and str(command.get("command", ""))
+        ]
+        if not self.serial_sequence_items:
+            messagebox.showinfo("串口多条发送", "没有启用的字符串")
+            return
+        self.serial_sequence_index = 0
+        self.serial_sequence_start_button.config(state="disabled")
+        self.log(f"串口顺序发送开始：{len(self.serial_sequence_items)} 条")
+        self._serial_sequence_next()
+
+    def _serial_sequence_next(self) -> None:
+        if self.serial_sequence_index >= len(self.serial_sequence_items):
+            self.serial_sequence_after_id = None
+            self.serial_sequence_start_button.config(state="normal")
+            self.log("串口顺序发送完成")
+            return
+        command = self.serial_sequence_items[self.serial_sequence_index]
+        if not self._serial_send_command_entry(command):
+            self._serial_stop_sequence("串口顺序发送已停止")
+            return
+        self.serial_sequence_index += 1
+        if self.serial_sequence_index >= len(self.serial_sequence_items):
+            self.serial_sequence_after_id = self.after(1, self._serial_sequence_next)
+            return
+        delay_ms = int(command.get("delay_ms", 1000))
+        self.serial_sequence_after_id = self.after(delay_ms, self._serial_sequence_next)
+
+    def _serial_stop_sequence(self, message: str = "串口顺序发送已停止") -> None:
+        was_running = self.serial_sequence_after_id is not None or bool(self.serial_sequence_items)
+        if self.serial_sequence_after_id is not None:
+            self.after_cancel(self.serial_sequence_after_id)
+            self.serial_sequence_after_id = None
+        self.serial_sequence_start_button.config(state="normal")
+        self.serial_sequence_items = []
+        self.serial_sequence_index = 0
+        if was_running:
+            self.log(message)
+
     def _refresh_serial_ports(self) -> None:
         ports = list_serial_ports()
         values = [f"{item.port} | {item.description}" for item in ports]
@@ -1089,6 +1423,7 @@ class BleAssistantApp(tk.Tk):
 
     def _serial_close(self) -> None:
         self._stop_loop_send("serial", False)
+        self._serial_stop_sequence("串口顺序发送已停止")
         if self.serial_port:
             port = self.serial_port.port
             self.serial_port.close()
