@@ -64,18 +64,37 @@ class WifiManager:
         output = self._run("wlan", "show", "networks", "mode=bssid")
         return self._parse_networks(output), output
 
-    def station_connect(self, ssid: str, password: str = "") -> str:
+    def station_connect(
+        self,
+        ssid: str,
+        password: str = "",
+        network: WifiNetwork | None = None,
+    ) -> str:
         ssid = ssid.strip()
         password = password.strip()
         if not ssid:
             raise ValueError("STATION SSID 不能为空")
-        output = ""
-        if password:
-            if not 8 <= len(password) <= 63:
+        authentication = network.authentication if network is not None else ""
+        encryption = network.encryption if network is not None else ""
+        outputs: list[str] = []
+        if password or self._is_open_network(authentication):
+            if password and not 8 <= len(password) <= 63:
                 raise ValueError("STATION 密码长度必须为 8-63 个字符")
-            output = self._add_wpa2_profile(ssid, password)
+            try:
+                outputs.append(self._add_profile(ssid, password, authentication, encryption))
+            except RuntimeError as exc:
+                if password and "wpa3" in authentication.casefold():
+                    outputs.append(
+                        f"WPA3 profile failed, retrying as WPA2PSK/AES:\n{exc}"
+                    )
+                    outputs.append(
+                        self._add_profile(ssid, password, "WPA2-Personal", encryption)
+                    )
+                else:
+                    raise
         connected = self._run("wlan", "connect", f"name={ssid}", f"ssid={ssid}")
-        return self._join_outputs(output, connected)
+        outputs.append(connected)
+        return self._join_outputs(*outputs)
 
     def station_disconnect(self) -> str:
         return self._run("wlan", "disconnect")
@@ -129,8 +148,14 @@ class WifiManager:
                     lines.append(f"  {key}: {value}")
         return "\n".join(lines)
 
-    def _add_wpa2_profile(self, ssid: str, password: str) -> str:
-        profile = self._wpa2_profile(ssid, password)
+    def _add_profile(
+        self,
+        ssid: str,
+        password: str,
+        authentication: str = "",
+        encryption: str = "",
+    ) -> str:
+        profile = self._profile_xml(ssid, password, authentication, encryption)
         with tempfile.NamedTemporaryFile(
             "w", suffix=".xml", delete=False, encoding="utf-8"
         ) as handle:
@@ -144,14 +169,32 @@ class WifiManager:
             except OSError:
                 pass
 
-    def _wpa2_profile(self, ssid: str, password: str) -> str:
+    def _profile_xml(
+        self,
+        ssid: str,
+        password: str,
+        authentication: str = "",
+        encryption: str = "",
+    ) -> str:
         ssid_xml = html.escape(ssid, quote=True)
+        ssid_hex = ssid.encode("utf-8").hex().upper()
         password_xml = html.escape(password, quote=True)
+        auth_value = self._profile_authentication(authentication, password)
+        encryption_value = self._profile_encryption(encryption, auth_value)
+        shared_key = ""
+        if password:
+            shared_key = f"""
+      <sharedKey>
+        <keyType>passPhrase</keyType>
+        <protected>false</protected>
+        <keyMaterial>{password_xml}</keyMaterial>
+      </sharedKey>"""
         return f"""<?xml version="1.0"?>
 <WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1">
   <name>{ssid_xml}</name>
   <SSIDConfig>
     <SSID>
+      <hex>{ssid_hex}</hex>
       <name>{ssid_xml}</name>
     </SSID>
   </SSIDConfig>
@@ -160,19 +203,40 @@ class WifiManager:
   <MSM>
     <security>
       <authEncryption>
-        <authentication>WPA2PSK</authentication>
-        <encryption>AES</encryption>
+        <authentication>{auth_value}</authentication>
+        <encryption>{encryption_value}</encryption>
         <useOneX>false</useOneX>
-      </authEncryption>
-      <sharedKey>
-        <keyType>passPhrase</keyType>
-        <protected>false</protected>
-        <keyMaterial>{password_xml}</keyMaterial>
-      </sharedKey>
+      </authEncryption>{shared_key}
     </security>
   </MSM>
 </WLANProfile>
 """
+
+    def _is_open_network(self, authentication: str) -> bool:
+        value = authentication.casefold()
+        return not value or "open" in value or "开放" in authentication
+
+    def _profile_authentication(self, authentication: str, password: str) -> str:
+        value = authentication.casefold()
+        if not password or self._is_open_network(authentication):
+            return "open"
+        if "wpa3" in value:
+            return "WPA3SAE"
+        if "wpa2" in value or "rsna" in value:
+            return "WPA2PSK"
+        if "wpa" in value:
+            return "WPAPSK"
+        return "WPA2PSK"
+
+    def _profile_encryption(self, encryption: str, authentication: str) -> str:
+        value = encryption.casefold()
+        if authentication == "open":
+            return "none"
+        if "tkip" in value:
+            return "TKIP"
+        if "wep" in value:
+            return "WEP"
+        return "AES"
 
     def _run(self, *args: str) -> str:
         completed = subprocess.run(

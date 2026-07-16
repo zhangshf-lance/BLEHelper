@@ -1112,11 +1112,17 @@ class BleAssistantApp(tk.Tk):
         )
 
     def _wifi_station_connect(self) -> None:
-        ssid = self.station_ssid.get()
+        network = self._selected_wifi_network()
+        ssid = self.station_ssid.get().strip()
+        if network is not None and (not ssid or ssid == network.ssid):
+            ssid = network.ssid
+            self.station_ssid.set(ssid)
+        else:
+            network = None
         password = self.station_password.get()
         self._run_wifi_task(
             "STATION 连接中...",
-            lambda: self.wifi.station_connect(ssid, password),
+            lambda: self.wifi.station_connect(ssid, password, network),
             lambda output: self._wifi_task_success("STATION 已发起连接", output),
         )
 
@@ -1145,6 +1151,7 @@ class BleAssistantApp(tk.Tk):
     def _wifi_show_selected_network(self, _event=None) -> None:
         network = self._selected_wifi_network()
         if network is not None:
+            self.station_ssid.set(network.ssid)
             self._show_wifi_network_details(network)
 
     def _selected_wifi_network(self) -> WifiNetwork | None:
