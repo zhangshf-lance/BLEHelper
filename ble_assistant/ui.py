@@ -66,12 +66,14 @@ class BleAssistantApp(tk.Tk):
         self.serial_sequence_after_id: str | None = None
         self.serial_sequence_index = 0
         self.serial_sequence_items: list[dict[str, object]] = []
+        self.serial_sequence_token = 0
         self._loop_send_after_ids: dict[str, str | None] = {
             "ble": None,
             "peripheral": None,
             "serial": None,
         }
         self.worker_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ui-worker")
+        self.serial_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="serial-write")
 
         self._build_style()
         self._build()
@@ -773,6 +775,21 @@ class BleAssistantApp(tk.Tk):
         widget.insert("end", text)
         widget.see("end")
 
+    def _append_packet(
+        self,
+        widget: ScrolledText,
+        direction: str,
+        source: str,
+        data: bytes,
+        hex_mode: bool,
+    ) -> None:
+        timestamp = _dt.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        body = format_payload(data, hex_mode)
+        self._append_text(
+            widget,
+            f"[{timestamp}] {direction} {source} {len(data)} bytes\n{body}\n\n",
+        )
+
     def _clear_text(self, widget: ScrolledText) -> None:
         widget.delete("1.0", "end")
 
@@ -948,7 +965,11 @@ class BleAssistantApp(tk.Tk):
         future = self.central.submit(
             self.central.write(char_uuid, data, response=self.ble_write_response.get())
         )
-        self._future_result(future, lambda _result: self.log(f"BLE 写入 {len(data)} 字节"), "BLE 写入失败")
+        self._future_result(
+            future,
+            lambda _result: self._ble_write_done(char_uuid, data),
+            "BLE 写入失败",
+        )
 
     def _ble_write_once(self, quiet: bool = False) -> bool:
         char_uuid = self._selected_char_uuid(quiet)
@@ -965,7 +986,11 @@ class BleAssistantApp(tk.Tk):
         future = self.central.submit(
             self.central.write(char_uuid, data, response=self.ble_write_response.get())
         )
-        self._future_result(future, lambda _result: self.log(f"BLE 写入 {len(data)} 字节"), "BLE 写入失败")
+        self._future_result(
+            future,
+            lambda _result: self._ble_write_done(char_uuid, data),
+            "BLE 写入失败",
+        )
         return True
 
     def _ble_notify(self) -> None:
@@ -986,8 +1011,11 @@ class BleAssistantApp(tk.Tk):
         self.after(0, lambda: self._append_ble_rx("NOTIFY", sender, data))
 
     def _append_ble_rx(self, label: str, source: str, data: bytes) -> None:
-        body = format_payload(data, self.ble_recv_hex.get())
-        self._append_text(self.ble_recv, f"{label} {source}: {body}\n")
+        self._append_packet(self.ble_recv, "RX", f"BLE {label} {source}", data, self.ble_recv_hex.get())
+
+    def _ble_write_done(self, char_uuid: str, data: bytes) -> None:
+        self._append_packet(self.ble_recv, "TX", f"BLE WRITE {char_uuid}", data, self.ble_send_hex.get())
+        self.log(f"BLE 写入 {len(data)} 字节")
 
     def _peripheral_start(self) -> None:
         name = self.peripheral_name.get()
@@ -1024,7 +1052,7 @@ class BleAssistantApp(tk.Tk):
         self._run_peripheral_task(
             "正在发送通知...",
             lambda: self.peripheral.notify(data),
-            self._apply_peripheral_status,
+            lambda status: self._peripheral_notify_done(status, data),
         )
 
     def _peripheral_notify_once(self, quiet: bool = False) -> bool:
@@ -1041,7 +1069,7 @@ class BleAssistantApp(tk.Tk):
         self._run_peripheral_task(
             "正在发送通知...",
             lambda: self.peripheral.notify(data),
-            self._apply_peripheral_status,
+            lambda status: self._peripheral_notify_done(status, data),
         )
         return True
 
@@ -1078,8 +1106,26 @@ class BleAssistantApp(tk.Tk):
         self.log(status.message)
 
     def _on_peripheral_rx(self, data: bytes) -> None:
-        body = format_payload(data, self.peripheral_recv_hex.get())
-        self.after(0, lambda: self._append_text(self.peripheral_recv, f"RX: {body}\n"))
+        self.after(
+            0,
+            lambda: self._append_packet(
+                self.peripheral_recv,
+                "RX",
+                "BLE PERIPHERAL WRITE",
+                data,
+                self.peripheral_recv_hex.get(),
+            ),
+        )
+
+    def _peripheral_notify_done(self, status, data: bytes) -> None:
+        self._apply_peripheral_status(status)
+        self._append_packet(
+            self.peripheral_recv,
+            "TX",
+            "BLE PERIPHERAL NOTIFY",
+            data,
+            self.peripheral_send_hex.get(),
+        )
 
     def _wifi_hostap_start(self) -> None:
         ssid = self.hostap_ssid.get()
@@ -1403,6 +1449,37 @@ class BleAssistantApp(tk.Tk):
             return
         self._serial_send_command_entry(self.serial_commands[index])
 
+    def _submit_serial_write(
+        self,
+        data: bytes,
+        success_message,
+        error_prefix: str,
+        source: str = "SERIAL",
+        hex_mode: bool = False,
+    ) -> bool:
+        if not self.serial_port:
+            messagebox.showinfo("串口未打开", "请先打开串口")
+            return False
+        port = self.serial_port
+        future = self.serial_worker.submit(port.write, data)
+
+        def done(done_future: Future) -> None:
+            try:
+                count = done_future.result()
+            except Exception as exc:
+                self.after(0, lambda caught=exc: self._show_error(error_prefix, caught))
+                return
+
+            def ok() -> None:
+                message = success_message(count) if callable(success_message) else str(success_message)
+                self._append_packet(self.serial_recv, "TX", source, data, hex_mode)
+                self.log(message)
+
+            self.after(0, ok)
+
+        future.add_done_callback(done)
+        return True
+
     def _serial_send_command_entry(self, command: dict[str, object]) -> bool:
         if not self.serial_port:
             messagebox.showinfo("串口未打开", "请先打开串口")
@@ -1410,14 +1487,18 @@ class BleAssistantApp(tk.Tk):
         text = str(command.get("command", ""))
         try:
             data = encode_payload(text, False, self.serial_line_ending.get())
-            count = self.serial_port.write(data)
         except Exception as exc:
             self._show_error("串口多条发送失败", exc)
             return False
         comment = str(command.get("comment", "")).strip()
         suffix = f"（{comment}）" if comment else ""
-        self.log(f"串口多条发送：{text}{suffix}，{count} 字节")
-        return True
+        return self._submit_serial_write(
+            data,
+            lambda count: f"串口多条发送：{text}{suffix}，{count} 字节",
+            "串口多条发送失败",
+            "SERIAL SEQUENCE",
+            False,
+        )
 
     def _serial_start_sequence(self) -> None:
         if self.serial_sequence_after_id is not None:
@@ -1515,16 +1596,22 @@ class BleAssistantApp(tk.Tk):
             messagebox.showinfo("串口未打开", "请先打开串口")
             return
         try:
+            hex_mode = self.serial_send_hex.get()
             data = encode_payload(
                 self.serial_send_text.get(),
-                self.serial_send_hex.get(),
+                hex_mode,
                 self.serial_line_ending.get(),
             )
-            count = self.serial_port.write(data)
         except Exception as exc:
             self._show_error("串口发送失败", exc)
             return
-        self.log(f"串口发送 {count} 字节")
+        self._submit_serial_write(
+            data,
+            lambda count: f"串口发送 {count} 字节",
+            "串口发送失败",
+            "SERIAL",
+            hex_mode,
+        )
 
     def _serial_send_once(self, quiet: bool = False) -> bool:
         if not self.serial_port:
@@ -1534,24 +1621,37 @@ class BleAssistantApp(tk.Tk):
                 messagebox.showinfo("串口未打开", "请先打开串口")
             return False
         try:
+            hex_mode = self.serial_send_hex.get()
             data = encode_payload(
                 self.serial_send_text.get(),
-                self.serial_send_hex.get(),
+                hex_mode,
                 self.serial_line_ending.get(),
             )
-            count = self.serial_port.write(data)
         except Exception as exc:
             if quiet:
                 self.log(f"串口循环发送停止：发送失败，{exc}")
             else:
                 self._show_error("串口发送失败", exc)
             return False
-        self.log(f"串口发送 {count} 字节")
-        return True
+        return self._submit_serial_write(
+            data,
+            lambda count: f"串口发送 {count} 字节",
+            "串口发送失败",
+            "SERIAL LOOP",
+            hex_mode,
+        )
 
     def _on_serial_data(self, data: bytes) -> None:
-        body = format_payload(data, self.serial_recv_hex.get())
-        self.after(0, lambda: self._append_text(self.serial_recv, body))
+        self.after(
+            0,
+            lambda: self._append_packet(
+                self.serial_recv,
+                "RX",
+                "SERIAL",
+                data,
+                self.serial_recv_hex.get(),
+            ),
+        )
 
     def _on_serial_error(self, exc: Exception) -> None:
         self.after(0, lambda: self._show_error("串口读取失败", exc))
@@ -1562,6 +1662,7 @@ class BleAssistantApp(tk.Tk):
         self._serial_close()
         self.peripheral.shutdown()
         self.central.shutdown()
+        self.serial_worker.shutdown(wait=False, cancel_futures=True)
         self.worker_pool.shutdown(wait=False, cancel_futures=True)
         self.destroy()
 
