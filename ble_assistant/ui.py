@@ -51,6 +51,11 @@ class BleAssistantApp(tk.Tk):
         self.serial_port: WindowsSerialPort | None = None
         self.ble_devices: list[BleDevice] = []
         self.ble_characteristics: list[GattCharacteristic] = []
+        self._loop_send_after_ids: dict[str, str | None] = {
+            "ble": None,
+            "peripheral": None,
+            "serial": None,
+        }
         self.worker_pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix="ui-worker")
 
         self._build_style()
@@ -238,6 +243,19 @@ class BleAssistantApp(tk.Tk):
         ttk.Button(
             send_frame, text="清除发送", command=lambda: self._clear_entry(self.ble_send_text)
         ).grid(row=0, column=1, padx=(0, 8), pady=8)
+        self.ble_loop_interval = tk.StringVar(value="1000")
+        ble_loop = ttk.Frame(send_frame)
+        ble_loop.grid(row=1, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
+        ttk.Label(ble_loop, text="循环间隔(ms)").pack(side="left")
+        ttk.Entry(ble_loop, width=8, textvariable=self.ble_loop_interval).pack(
+            side="left", padx=(6, 8)
+        )
+        ttk.Button(ble_loop, text="开始循环", command=lambda: self._start_loop_send("ble")).pack(
+            side="left"
+        )
+        ttk.Button(ble_loop, text="停止循环", command=lambda: self._stop_loop_send("ble")).pack(
+            side="left", padx=6
+        )
 
         recv_frame = ttk.LabelFrame(right, text="接收 / 读取")
         recv_frame.grid(row=3, column=0, sticky="nsew", pady=(8, 0))
@@ -312,6 +330,19 @@ class BleAssistantApp(tk.Tk):
         ttk.Button(
             send, text="清除发送", command=lambda: self._clear_entry(self.peripheral_send_text)
         ).grid(row=0, column=2, padx=(0, 8), pady=8)
+        self.peripheral_loop_interval = tk.StringVar(value="1000")
+        peripheral_loop = ttk.Frame(send)
+        peripheral_loop.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+        ttk.Label(peripheral_loop, text="循环间隔(ms)").pack(side="left")
+        ttk.Entry(peripheral_loop, width=8, textvariable=self.peripheral_loop_interval).pack(
+            side="left", padx=(6, 8)
+        )
+        ttk.Button(
+            peripheral_loop, text="开始循环", command=lambda: self._start_loop_send("peripheral")
+        ).pack(side="left")
+        ttk.Button(
+            peripheral_loop, text="停止循环", command=lambda: self._stop_loop_send("peripheral")
+        ).pack(side="left", padx=6)
         recv = ttk.LabelFrame(io, text="主设备写入")
         recv.columnconfigure(0, weight=1)
         recv.rowconfigure(0, weight=1)
@@ -384,6 +415,19 @@ class BleAssistantApp(tk.Tk):
         ttk.Button(
             send, text="清除发送", command=lambda: self._clear_entry(self.serial_send_text)
         ).grid(row=0, column=2, padx=(0, 8), pady=8)
+        self.serial_loop_interval = tk.StringVar(value="1000")
+        serial_loop = ttk.Frame(send)
+        serial_loop.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+        ttk.Label(serial_loop, text="循环间隔(ms)").pack(side="left")
+        ttk.Entry(serial_loop, width=8, textvariable=self.serial_loop_interval).pack(
+            side="left", padx=(6, 8)
+        )
+        ttk.Button(
+            serial_loop, text="开始循环", command=lambda: self._start_loop_send("serial")
+        ).pack(side="left")
+        ttk.Button(
+            serial_loop, text="停止循环", command=lambda: self._stop_loop_send("serial")
+        ).pack(side="left", padx=6)
 
     def _build_log_tab(self) -> None:
         self.log_tab.columnconfigure(0, weight=1)
@@ -430,6 +474,69 @@ class BleAssistantApp(tk.Tk):
 
     def _clear_entry(self, widget) -> None:
         widget.delete(0, "end")
+
+    def _loop_interval(self, channel: str) -> int | None:
+        variables = {
+            "ble": self.ble_loop_interval,
+            "peripheral": self.peripheral_loop_interval,
+            "serial": self.serial_loop_interval,
+        }
+        try:
+            interval = int(variables[channel].get())
+        except ValueError:
+            self._show_error("循环发送间隔错误", ValueError("请输入整数毫秒数"))
+            return None
+        if interval < 50:
+            self._show_error("循环发送间隔错误", ValueError("间隔不能小于 50 ms"))
+            return None
+        return interval
+
+    def _start_loop_send(self, channel: str) -> None:
+        if self._loop_send_after_ids.get(channel) is not None:
+            self.log(f"{self._loop_send_name(channel)}循环发送已在运行")
+            return
+        interval = self._loop_interval(channel)
+        if interval is None:
+            return
+        self.log(f"{self._loop_send_name(channel)}开始循环发送，间隔 {interval} ms")
+        self._run_loop_send(channel)
+
+    def _stop_loop_send(self, channel: str, log_message: bool = True) -> None:
+        after_id = self._loop_send_after_ids.get(channel)
+        if after_id is not None:
+            self.after_cancel(after_id)
+            self._loop_send_after_ids[channel] = None
+            if log_message:
+                self.log(f"{self._loop_send_name(channel)}已停止循环发送")
+
+    def _run_loop_send(self, channel: str) -> None:
+        if not self._send_once(channel, quiet=True):
+            self._loop_send_after_ids[channel] = None
+            self.log(f"{self._loop_send_name(channel)}循环发送已停止")
+            return
+        interval = self._loop_interval(channel)
+        if interval is None:
+            self._loop_send_after_ids[channel] = None
+            return
+        self._loop_send_after_ids[channel] = self.after(
+            interval, lambda: self._run_loop_send(channel)
+        )
+
+    def _send_once(self, channel: str, quiet: bool = False) -> bool:
+        if channel == "ble":
+            return self._ble_write_once(quiet)
+        if channel == "peripheral":
+            return self._peripheral_notify_once(quiet)
+        if channel == "serial":
+            return self._serial_send_once(quiet)
+        return False
+
+    def _loop_send_name(self, channel: str) -> str:
+        return {
+            "ble": "BLE 主设备",
+            "peripheral": "BLE 从设备",
+            "serial": "串口",
+        }.get(channel, channel)
 
     def _future_result(self, future: Future, callback, error_prefix: str) -> None:
         def done(done_future: Future) -> None:
@@ -498,12 +605,16 @@ class BleAssistantApp(tk.Tk):
         self.ble_status.config(text=f"已连接，{len(values)} 个特征")
 
     def _ble_disconnect(self) -> None:
+        self._stop_loop_send("ble", False)
         future = self.central.submit(self.central.disconnect())
         self._future_result(future, lambda _result: self.ble_status.config(text="已断开"), "BLE 断开失败")
 
-    def _selected_char_uuid(self) -> str | None:
+    def _selected_char_uuid(self, quiet: bool = False) -> str | None:
         index = self.ble_char_combo.current()
         if index < 0 or index >= len(self.ble_characteristics):
+            if quiet:
+                self.log("BLE 主设备循环发送停止：请先选择 GATT 特征")
+                return None
             messagebox.showinfo("选择特征", "请先选择一个 GATT 特征")
             return None
         return self.ble_characteristics[index].uuid
@@ -528,6 +639,24 @@ class BleAssistantApp(tk.Tk):
             self.central.write(char_uuid, data, response=self.ble_write_response.get())
         )
         self._future_result(future, lambda _result: self.log(f"BLE 写入 {len(data)} 字节"), "BLE 写入失败")
+
+    def _ble_write_once(self, quiet: bool = False) -> bool:
+        char_uuid = self._selected_char_uuid(quiet)
+        if not char_uuid:
+            return False
+        try:
+            data = encode_payload(self.ble_send_text.get(), self.ble_send_hex.get(), "none")
+        except ValueError as exc:
+            if quiet:
+                self.log(f"BLE 主设备循环发送停止：数据格式错误，{exc}")
+            else:
+                self._show_error("BLE 数据格式错误", exc)
+            return False
+        future = self.central.submit(
+            self.central.write(char_uuid, data, response=self.ble_write_response.get())
+        )
+        self._future_result(future, lambda _result: self.log(f"BLE 写入 {len(data)} 字节"), "BLE 写入失败")
+        return True
 
     def _ble_notify(self) -> None:
         char_uuid = self._selected_char_uuid()
@@ -562,6 +691,7 @@ class BleAssistantApp(tk.Tk):
         )
 
     def _peripheral_stop(self) -> None:
+        self._stop_loop_send("peripheral", False)
         self._run_peripheral_task(
             "正在停止从设备...",
             self.peripheral.stop,
@@ -586,6 +716,24 @@ class BleAssistantApp(tk.Tk):
             lambda: self.peripheral.notify(data),
             self._apply_peripheral_status,
         )
+
+    def _peripheral_notify_once(self, quiet: bool = False) -> bool:
+        if self.peripheral_notify_button.cget("state") == "disabled":
+            return True
+        try:
+            data = encode_payload(self.peripheral_send_text.get(), self.peripheral_send_hex.get(), "none")
+        except ValueError as exc:
+            if quiet:
+                self.log(f"BLE 从设备循环发送停止：数据格式错误，{exc}")
+            else:
+                self._show_error("从设备数据格式错误", exc)
+            return False
+        self._run_peripheral_task(
+            "正在发送通知...",
+            lambda: self.peripheral.notify(data),
+            self._apply_peripheral_status,
+        )
+        return True
 
     def _run_peripheral_task(self, busy_text: str, action, callback) -> None:
         self._set_peripheral_busy(True, busy_text)
@@ -657,6 +805,7 @@ class BleAssistantApp(tk.Tk):
         self.log(f"串口已打开：{port} @ {baud}")
 
     def _serial_close(self) -> None:
+        self._stop_loop_send("serial", False)
         if self.serial_port:
             port = self.serial_port.port
             self.serial_port.close()
@@ -680,6 +829,29 @@ class BleAssistantApp(tk.Tk):
             return
         self.log(f"串口发送 {count} 字节")
 
+    def _serial_send_once(self, quiet: bool = False) -> bool:
+        if not self.serial_port:
+            if quiet:
+                self.log("串口循环发送停止：请先打开串口")
+            else:
+                messagebox.showinfo("串口未打开", "请先打开串口")
+            return False
+        try:
+            data = encode_payload(
+                self.serial_send_text.get(),
+                self.serial_send_hex.get(),
+                self.serial_line_ending.get(),
+            )
+            count = self.serial_port.write(data)
+        except Exception as exc:
+            if quiet:
+                self.log(f"串口循环发送停止：发送失败，{exc}")
+            else:
+                self._show_error("串口发送失败", exc)
+            return False
+        self.log(f"串口发送 {count} 字节")
+        return True
+
     def _on_serial_data(self, data: bytes) -> None:
         body = format_payload(data, self.serial_recv_hex.get())
         self.after(0, lambda: self._append_text(self.serial_recv, body))
@@ -688,6 +860,8 @@ class BleAssistantApp(tk.Tk):
         self.after(0, lambda: self._show_error("串口读取失败", exc))
 
     def _on_close(self) -> None:
+        for channel in tuple(self._loop_send_after_ids):
+            self._stop_loop_send(channel, False)
         self._serial_close()
         self.peripheral.shutdown()
         self.central.shutdown()
