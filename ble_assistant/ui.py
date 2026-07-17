@@ -468,14 +468,13 @@ class BleAssistantApp(tk.Tk):
     def _build_serial_tab(self) -> None:
         tab = self.serial_tab
         tab.columnconfigure(0, weight=1)
-        tab.rowconfigure(2, weight=2)
-        tab.rowconfigure(4, weight=1)
+        tab.rowconfigure(2, weight=1)
 
         toolbar = ttk.Frame(tab)
         toolbar.grid(row=0, column=0, sticky="ew")
         ttk.Label(toolbar, text="端口").pack(side="left")
         self.serial_port_var = tk.StringVar()
-        self.serial_combo = ttk.Combobox(toolbar, textvariable=self.serial_port_var, width=18)
+        self.serial_combo = ttk.Combobox(toolbar, textvariable=self.serial_port_var, width=34)
         self.serial_combo.pack(side="left", padx=(6, 12))
         ttk.Button(toolbar, text="刷新", command=self._refresh_serial_ports).pack(side="left")
         ttk.Label(toolbar, text="波特率").pack(side="left", padx=(12, 0))
@@ -485,6 +484,7 @@ class BleAssistantApp(tk.Tk):
             textvariable=self.serial_baud,
             values=[str(item) for item in common_baudrates()],
             width=10,
+            state="normal",
         ).pack(side="left", padx=6)
         ttk.Button(toolbar, text="打开", command=self._serial_open, style="Accent.TButton").pack(side="left", padx=(12, 6))
         ttk.Button(toolbar, text="关闭", command=self._serial_close).pack(side="left")
@@ -504,7 +504,7 @@ class BleAssistantApp(tk.Tk):
             command=self._update_serial_recv_hex_mode,
         ).pack(side="left", padx=(8, 12))
         ttk.Label(options, text="行尾").pack(side="left", padx=(12, 0))
-        self.serial_line_ending = tk.StringVar(value="none")
+        self.serial_line_ending = tk.StringVar(value="crlf")
         ttk.Combobox(
             options,
             textvariable=self.serial_line_ending,
@@ -513,8 +513,10 @@ class BleAssistantApp(tk.Tk):
             state="readonly",
         ).pack(side="left", padx=6)
 
-        terminal = ttk.LabelFrame(tab, text="接收窗口")
-        terminal.grid(row=2, column=0, sticky="nsew")
+        serial_panes = ttk.PanedWindow(tab, orient=tk.VERTICAL)
+        serial_panes.grid(row=2, column=0, sticky="nsew")
+
+        terminal = ttk.LabelFrame(serial_panes, text="接收窗口")
         terminal.columnconfigure(0, weight=1)
         terminal.rowconfigure(0, weight=1)
         self.serial_recv = ScrolledText(terminal, height=18, wrap="word")
@@ -523,8 +525,7 @@ class BleAssistantApp(tk.Tk):
             terminal, text="清除接收", command=lambda: self._clear_text(self.serial_recv)
         ).grid(row=1, column=0, sticky="e", padx=8, pady=(0, 8))
 
-        send = ttk.LabelFrame(tab, text="发送数据")
-        send.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        send = ttk.LabelFrame(serial_panes, text="发送数据")
         send.columnconfigure(0, weight=1)
         self.serial_send_text = ttk.Entry(send)
         self.serial_send_text.grid(row=0, column=0, sticky="ew", padx=8, pady=8)
@@ -547,8 +548,7 @@ class BleAssistantApp(tk.Tk):
             serial_loop, text="停止循环", command=lambda: self._stop_loop_send("serial")
         ).pack(side="left", padx=6)
 
-        multi = ttk.LabelFrame(tab, text="多条字符串顺序发送")
-        multi.grid(row=4, column=0, sticky="nsew", pady=(8, 0))
+        multi = ttk.LabelFrame(serial_panes, text="多条字符串顺序发送")
         multi.columnconfigure(0, weight=1)
         multi.rowconfigure(0, weight=1)
 
@@ -655,6 +655,10 @@ class BleAssistantApp(tk.Tk):
             side="right", padx=(6, 0)
         )
         ttk.Button(buttons, text="载入", command=self._load_serial_commands).pack(side="right")
+
+        serial_panes.add(terminal, weight=3)
+        serial_panes.add(send, weight=0)
+        serial_panes.add(multi, weight=2)
 
         self._load_serial_commands(show_log=False)
 
