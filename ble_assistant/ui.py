@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import re
 import sys
 import tkinter.font as tkfont
 import tkinter as tk
@@ -60,8 +61,10 @@ class BleAssistantApp(tk.Tk):
         self.wifi = WifiManager()
         self.serial_port: WindowsSerialPort | None = None
         self.ble_devices: list[BleDevice] = []
+        self.filtered_ble_devices: list[BleDevice] = []
         self.ble_characteristics: list[GattCharacteristic] = []
         self.wifi_networks: list[WifiNetwork] = []
+        self.filtered_wifi_networks: list[WifiNetwork] = []
         self.serial_commands: list[dict[str, object]] = []
         self.serial_sequence_after_id: str | None = None
         self.serial_sequence_index = 0
@@ -191,6 +194,11 @@ class BleAssistantApp(tk.Tk):
             font=("Microsoft YaHei UI", 9),
         )
         style.configure(
+            "ScanResult.Treeview",
+            rowheight=30,
+            font=("Microsoft YaHei UI", 10),
+        )
+        style.configure(
             "Treeview.Heading",
             background="#e6eef6",
             foreground="#334155",
@@ -268,22 +276,39 @@ class BleAssistantApp(tk.Tk):
 
         left = ttk.LabelFrame(tab, text="发现的设备")
         left.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
-        left.rowconfigure(0, weight=1)
+        left.rowconfigure(1, weight=1)
         left.columnconfigure(0, weight=1)
-        self.ble_device_list = tk.Listbox(
-            left,
-            activestyle="dotbox",
-            exportselection=False,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=self.BORDER,
-            selectbackground=self.ACCENT,
-            selectforeground="#ffffff",
-            background=self.TEXT_BG,
-            foreground=self.TEXT,
-            font=("Microsoft YaHei UI", 9),
+        self.ble_device_search = tk.StringVar()
+        ble_search_bar = ttk.Frame(left)
+        ble_search_bar.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=(8, 0))
+        ble_search_bar.columnconfigure(1, weight=1)
+        ttk.Label(ble_search_bar, text="搜索设备").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(ble_search_bar, textvariable=self.ble_device_search).grid(
+            row=0, column=1, sticky="ew"
         )
-        self.ble_device_list.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        ttk.Button(ble_search_bar, text="清空", command=self._ble_clear_device_search).grid(
+            row=0, column=2, sticky="e", padx=(8, 0)
+        )
+        self.ble_device_search.trace_add("write", lambda *_args: self._ble_filter_devices())
+        self.ble_device_list = ttk.Treeview(
+            left,
+            columns=("name", "address", "rssi"),
+            show="headings",
+            selectmode="browse",
+            style="ScanResult.Treeview",
+        )
+        self.ble_device_list.heading("name", text="设备名称")
+        self.ble_device_list.heading("address", text="地址")
+        self.ble_device_list.heading("rssi", text="信号")
+        self.ble_device_list.column("name", width=180, minwidth=120, stretch=True)
+        self.ble_device_list.column("address", width=190, minwidth=150, stretch=False)
+        self.ble_device_list.column("rssi", width=82, minwidth=70, stretch=False, anchor="center")
+        self.ble_device_list.tag_configure("odd", background="#f6fbff")
+        self.ble_device_list.tag_configure("weak", foreground=self.MUTED)
+        self.ble_device_list.grid(row=1, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        ble_scroll = ttk.Scrollbar(left, orient="vertical", command=self.ble_device_list.yview)
+        ble_scroll.grid(row=1, column=1, sticky="ns", padx=(0, 8), pady=8)
+        self.ble_device_list.configure(yscrollcommand=ble_scroll.set)
         self.ble_device_list.bind("<Double-Button-1>", lambda _event: self._ble_connect())
 
         right = ttk.Frame(tab)
@@ -692,26 +717,47 @@ class BleAssistantApp(tk.Tk):
         lower.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
 
         networks = ttk.LabelFrame(lower, text="STATION 扫描结果")
-        networks.rowconfigure(0, weight=1)
+        networks.rowconfigure(1, weight=1)
         networks.columnconfigure(0, weight=1)
-        self.wifi_network_list = tk.Listbox(
-            networks,
-            activestyle="dotbox",
-            exportselection=False,
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground=self.BORDER,
-            selectbackground=self.ACCENT,
-            selectforeground="#ffffff",
-            background=self.TEXT_BG,
-            foreground=self.TEXT,
-            font=("Microsoft YaHei UI", 9),
+        self.wifi_network_search = tk.StringVar()
+        search_bar = ttk.Frame(networks)
+        search_bar.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 0))
+        search_bar.columnconfigure(1, weight=1)
+        ttk.Label(search_bar, text="搜索热点").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(search_bar, textvariable=self.wifi_network_search).grid(
+            row=0, column=1, sticky="ew"
         )
-        self.wifi_network_list.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
-        self.wifi_network_list.bind("<<ListboxSelect>>", self._wifi_show_selected_network)
+        ttk.Button(search_bar, text="清空", command=self._wifi_clear_network_search).grid(
+            row=0, column=2, sticky="e", padx=(8, 0)
+        )
+        self.wifi_network_search.trace_add("write", lambda *_args: self._wifi_filter_networks())
+        self.wifi_network_list = ttk.Treeview(
+            networks,
+            columns=("ssid", "signal", "authentication", "encryption", "bssid_count"),
+            show="headings",
+            selectmode="browse",
+            style="ScanResult.Treeview",
+        )
+        self.wifi_network_list.heading("ssid", text="热点名称")
+        self.wifi_network_list.heading("signal", text="信号")
+        self.wifi_network_list.heading("authentication", text="认证")
+        self.wifi_network_list.heading("encryption", text="加密")
+        self.wifi_network_list.heading("bssid_count", text="BSSID")
+        self.wifi_network_list.column("ssid", width=190, minwidth=130, stretch=True)
+        self.wifi_network_list.column("signal", width=82, minwidth=70, stretch=False, anchor="center")
+        self.wifi_network_list.column("authentication", width=130, minwidth=110, stretch=False)
+        self.wifi_network_list.column("encryption", width=90, minwidth=70, stretch=False)
+        self.wifi_network_list.column("bssid_count", width=70, minwidth=60, stretch=False, anchor="center")
+        self.wifi_network_list.tag_configure("odd", background="#f6fbff")
+        self.wifi_network_list.tag_configure("weak", foreground=self.MUTED)
+        self.wifi_network_list.grid(row=1, column=0, sticky="nsew", padx=(8, 0), pady=8)
+        wifi_scroll = ttk.Scrollbar(networks, orient="vertical", command=self.wifi_network_list.yview)
+        wifi_scroll.grid(row=1, column=1, sticky="ns", padx=(0, 8), pady=8)
+        self.wifi_network_list.configure(yscrollcommand=wifi_scroll.set)
+        self.wifi_network_list.bind("<<TreeviewSelect>>", self._wifi_show_selected_network)
         self.wifi_network_list.bind("<Double-Button-1>", lambda _event: self._wifi_use_network())
         ttk.Button(networks, text="使用选中 SSID", command=self._wifi_use_network).grid(
-            row=1, column=0, sticky="e", padx=8, pady=(0, 8)
+            row=2, column=0, sticky="e", padx=8, pady=(0, 8)
         )
 
         output = ttk.LabelFrame(lower, text="WiFi 输出")
@@ -889,18 +935,88 @@ class BleAssistantApp(tk.Tk):
 
     def _ble_scan_done(self, devices: list[BleDevice]) -> None:
         self.ble_devices = devices
-        self.ble_device_list.delete(0, "end")
-        for device in devices:
-            rssi = "" if device.rssi is None else f" RSSI {device.rssi}"
-            self.ble_device_list.insert("end", f"{device.name} | {device.address}{rssi}")
-        self.ble_status.config(text=f"发现 {len(devices)} 个设备")
+        self._refresh_ble_device_list()
+        self.ble_status.config(
+            text=f"发现 {len(devices)} 个设备，显示 {len(self.filtered_ble_devices)} 个"
+        )
 
-    def _selected_ble_device(self) -> BleDevice | None:
-        selection = self.ble_device_list.curselection()
+    def _ble_clear_device_search(self) -> None:
+        self.ble_device_search.set("")
+
+    def _ble_filter_devices(self) -> None:
+        self._refresh_ble_device_list()
+        self.ble_status.config(
+            text=f"发现 {len(self.ble_devices)} 个设备，显示 {len(self.filtered_ble_devices)} 个"
+        )
+
+    def _refresh_ble_device_list(self) -> None:
+        selected = self._selected_ble_device(show_message=False)
+        query = self.ble_device_search.get().strip().casefold()
+        if query:
+            devices = [
+                device
+                for device in self.ble_devices
+                if query in self._ble_device_list_label(device).casefold()
+            ]
+        else:
+            devices = list(self.ble_devices)
+        self.filtered_ble_devices = devices
+        existing = self.ble_device_list.get_children()
+        if existing:
+            self.ble_device_list.delete(*existing)
+        selected_iid: str | None = None
+        for index, device in enumerate(self.filtered_ble_devices):
+            tags = []
+            if index % 2:
+                tags.append("odd")
+            if device.rssi is not None and device.rssi <= -85:
+                tags.append("weak")
+            if selected is not None and device.address == selected.address:
+                selected_iid = str(index)
+            self.ble_device_list.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=(device.name or "(无名称)", device.address, self._format_ble_rssi(device.rssi)),
+                tags=tuple(tags),
+            )
+        if selected_iid is not None:
+            self.ble_device_list.selection_set(selected_iid)
+            self.ble_device_list.focus(selected_iid)
+            self.ble_device_list.see(selected_iid)
+
+    def _ble_device_list_label(self, device: BleDevice) -> str:
+        return " ".join(
+            item
+            for item in (
+                device.name or "",
+                device.address,
+                "" if device.rssi is None else str(device.rssi),
+            )
+            if item
+        )
+
+    def _selected_ble_device(self, show_message: bool = True) -> BleDevice | None:
+        selection = self.ble_device_list.selection()
         if not selection:
-            messagebox.showinfo("选择设备", "请先选择一个 BLE 设备")
+            if show_message:
+                messagebox.showinfo("选择设备", "请先选择一个 BLE 设备")
             return None
-        return self.ble_devices[selection[0]]
+        index = int(selection[0])
+        if index < 0 or index >= len(self.filtered_ble_devices):
+            return None
+        return self.filtered_ble_devices[index]
+
+    def _format_ble_rssi(self, rssi: int | None) -> str:
+        if rssi is None:
+            return "-"
+        if rssi >= -60:
+            level = "强"
+        elif rssi >= -80:
+            level = "中"
+        else:
+            level = "弱"
+        return f"{level} {rssi} dBm"
 
     def _ble_connect(self) -> None:
         device = self._selected_ble_device()
@@ -1201,13 +1317,13 @@ class BleAssistantApp(tk.Tk):
             self._show_wifi_network_details(network)
 
     def _selected_wifi_network(self) -> WifiNetwork | None:
-        selection = self.wifi_network_list.curselection()
+        selection = self.wifi_network_list.selection()
         if not selection:
             return None
-        index = selection[0]
-        if index < 0 or index >= len(self.wifi_networks):
+        index = int(selection[0])
+        if index < 0 or index >= len(self.filtered_wifi_networks):
             return None
-        return self.wifi_networks[index]
+        return self.filtered_wifi_networks[index]
 
     def _run_wifi_task(self, busy_text: str, action, callback) -> None:
         self._set_wifi_busy(True, busy_text)
@@ -1228,27 +1344,93 @@ class BleAssistantApp(tk.Tk):
     def _wifi_station_scan_done(self, result) -> None:
         networks, _output = result
         self.wifi_networks = networks
-        self.wifi_network_list.delete(0, "end")
-        for network in networks:
-            meta = " | ".join(
-                item
-                for item in (
-                    network.signal,
-                    network.authentication,
-                    network.encryption,
-                    f"BSSID {network.bssid_count}" if network.bssid_count else "",
-                )
-                if item
-            )
-            suffix = f" | {meta}" if meta else ""
-            self.wifi_network_list.insert("end", f"{network.ssid}{suffix}")
-        self.station_status.config(text=f"发现 {len(networks)} 个网络")
-        self._clear_text(self.wifi_output)
-        if networks:
-            self.wifi_network_list.selection_set(0)
-            self.wifi_network_list.activate(0)
-            self._show_wifi_network_details(networks[0])
+        self._refresh_wifi_network_list()
         self.log(f"WiFi STATION 扫描完成：{len(networks)} 个网络")
+
+    def _wifi_clear_network_search(self) -> None:
+        self.wifi_network_search.set("")
+
+    def _wifi_filter_networks(self) -> None:
+        self._refresh_wifi_network_list()
+
+    def _refresh_wifi_network_list(self) -> None:
+        selected = self._selected_wifi_network()
+        query = self.wifi_network_search.get().strip().casefold()
+        if query:
+            networks = [
+                network
+                for network in self.wifi_networks
+                if query in self._wifi_network_list_label(network).casefold()
+            ]
+        else:
+            networks = list(self.wifi_networks)
+
+        self.filtered_wifi_networks = networks
+        existing = self.wifi_network_list.get_children()
+        if existing:
+            self.wifi_network_list.delete(*existing)
+        for index, network in enumerate(networks):
+            tags = []
+            if index % 2:
+                tags.append("odd")
+            percent = self._wifi_signal_percent(network.signal)
+            if percent is not None and percent < 40:
+                tags.append("weak")
+            self.wifi_network_list.insert(
+                "",
+                "end",
+                iid=str(index),
+                values=self._wifi_network_row_values(network),
+                tags=tuple(tags),
+            )
+
+        if query:
+            self.station_status.config(text=f"发现 {len(self.wifi_networks)} 个网络，匹配 {len(networks)} 个")
+        else:
+            self.station_status.config(text=f"发现 {len(self.wifi_networks)} 个网络")
+
+        self._clear_text(self.wifi_output)
+        if not networks:
+            return
+
+        selected_index = 0
+        if selected in networks:
+            selected_index = networks.index(selected)
+        selected_iid = str(selected_index)
+        self.wifi_network_list.selection_set(selected_iid)
+        self.wifi_network_list.focus(selected_iid)
+        self.wifi_network_list.see(selected_iid)
+        self._show_wifi_network_details(networks[selected_index])
+
+    def _wifi_network_list_label(self, network: WifiNetwork) -> str:
+        return " ".join(self._wifi_network_row_values(network))
+
+    def _wifi_network_row_values(self, network: WifiNetwork) -> tuple[str, str, str, str, str]:
+        return (
+            network.ssid or "(隐藏热点)",
+            self._format_wifi_signal(network.signal),
+            network.authentication or "-",
+            network.encryption or "-",
+            str(network.bssid_count) if network.bssid_count else "-",
+        )
+
+    def _format_wifi_signal(self, signal: str) -> str:
+        percent = self._wifi_signal_percent(signal)
+        if percent is None:
+            return signal or "-"
+        if percent >= 70:
+            level = "强"
+        elif percent >= 40:
+            level = "中"
+        else:
+            level = "弱"
+        return f"{level} {percent}%"
+
+    def _wifi_signal_percent(self, signal: str) -> int | None:
+        match = re.search(r"\d+", signal)
+        if match is None:
+            return None
+        return int(match.group(0))
 
     def _wifi_task_success(self, status: str, output: str) -> None:
         if status.startswith("HOSTAP"):
