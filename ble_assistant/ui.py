@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import queue
 import re
 import sys
 import tkinter.font as tkfont
@@ -70,6 +71,8 @@ class BleAssistantApp(tk.Tk):
         self.serial_sequence_index = 0
         self.serial_sequence_items: list[dict[str, object]] = []
         self.serial_sequence_token = 0
+        self.serial_display_queue: queue.Queue[str] = queue.Queue()
+        self.serial_display_after_id: str | None = None
         self._loop_send_after_ids: dict[str, str | None] = {
             "ble": None,
             "peripheral": None,
@@ -82,6 +85,7 @@ class BleAssistantApp(tk.Tk):
         self._build()
         self._refresh_serial_ports()
         self._show_backend_status()
+        self._schedule_serial_display_flush()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _set_app_icon(self) -> None:
@@ -491,8 +495,14 @@ class BleAssistantApp(tk.Tk):
         options.grid(row=1, column=0, sticky="ew", pady=8)
         self.serial_send_hex = tk.BooleanVar(value=False)
         self.serial_recv_hex = tk.BooleanVar(value=False)
+        self.serial_recv_hex_value = False
         ttk.Checkbutton(options, text="发送HEX", variable=self.serial_send_hex).pack(side="left")
-        ttk.Checkbutton(options, text="接收HEX", variable=self.serial_recv_hex).pack(side="left", padx=(8, 12))
+        ttk.Checkbutton(
+            options,
+            text="接收HEX",
+            variable=self.serial_recv_hex,
+            command=self._update_serial_recv_hex_mode,
+        ).pack(side="left", padx=(8, 12))
         ttk.Label(options, text="行尾").pack(side="left", padx=(12, 0))
         self.serial_line_ending = tk.StringVar(value="none")
         ttk.Combobox(
@@ -846,6 +856,40 @@ class BleAssistantApp(tk.Tk):
             widget,
             f"[{timestamp}] {direction} {source} {len(data)} bytes\n{body}\n\n",
         )
+
+    def _format_serial_payload(self, data: bytes, hex_mode: bool) -> str:
+        body = format_payload(data, hex_mode)
+        if hex_mode:
+            return body
+        return body.replace("\r", "\\r").replace("\n", "\\n")
+
+    def _queue_serial_packet(self, direction: str, data: bytes, hex_mode: bool) -> None:
+        timestamp = _dt.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        label = "发送" if direction == "TX" else "接收"
+        body = self._format_serial_payload(data, hex_mode)
+        self.serial_display_queue.put(f"[{timestamp}] {label}: {body}\n")
+
+    def _schedule_serial_display_flush(self) -> None:
+        if self.serial_display_after_id is None:
+            self.serial_display_after_id = self.after(40, self._flush_serial_display)
+
+    def _flush_serial_display(self) -> None:
+        self.serial_display_after_id = None
+        lines: list[str] = []
+        for _ in range(500):
+            try:
+                lines.append(self.serial_display_queue.get_nowait())
+            except queue.Empty:
+                break
+        if lines:
+            self._append_text(self.serial_recv, "".join(lines))
+            self._trim_text_lines(self.serial_recv, 3000)
+        self._schedule_serial_display_flush()
+
+    def _trim_text_lines(self, widget: ScrolledText, max_lines: int) -> None:
+        line_count = int(widget.index("end-1c").split(".", 1)[0])
+        if line_count > max_lines:
+            widget.delete("1.0", f"{line_count - max_lines}.0")
 
     def _clear_text(self, widget: ScrolledText) -> None:
         widget.delete("1.0", "end")
@@ -1649,9 +1693,9 @@ class BleAssistantApp(tk.Tk):
     def _submit_serial_write(
         self,
         data: bytes,
-        success_message,
+        _success_message,
         error_prefix: str,
-        source: str = "SERIAL",
+        _source: str = "SERIAL",
         hex_mode: bool = False,
     ) -> bool:
         if not self.serial_port:
@@ -1662,17 +1706,11 @@ class BleAssistantApp(tk.Tk):
 
         def done(done_future: Future) -> None:
             try:
-                count = done_future.result()
+                done_future.result()
             except Exception as exc:
                 self.after(0, lambda caught=exc: self._show_error(error_prefix, caught))
                 return
-
-            def ok() -> None:
-                message = success_message(count) if callable(success_message) else str(success_message)
-                self._append_packet(self.serial_recv, "TX", source, data, hex_mode)
-                self.log(message)
-
-            self.after(0, ok)
+            self._queue_serial_packet("TX", data, hex_mode)
 
         future.add_done_callback(done)
         return True
@@ -1760,6 +1798,9 @@ class BleAssistantApp(tk.Tk):
             value = value.split("|", 1)[0].strip()
         return value
 
+    def _update_serial_recv_hex_mode(self) -> None:
+        self.serial_recv_hex_value = bool(self.serial_recv_hex.get())
+
     def _serial_open(self) -> None:
         if self.serial_port:
             self._serial_close()
@@ -1840,21 +1881,15 @@ class BleAssistantApp(tk.Tk):
         )
 
     def _on_serial_data(self, data: bytes) -> None:
-        self.after(
-            0,
-            lambda: self._append_packet(
-                self.serial_recv,
-                "RX",
-                "SERIAL",
-                data,
-                self.serial_recv_hex.get(),
-            ),
-        )
+        self._queue_serial_packet("RX", data, self.serial_recv_hex_value)
 
     def _on_serial_error(self, exc: Exception) -> None:
         self.after(0, lambda: self._show_error("串口读取失败", exc))
 
     def _on_close(self) -> None:
+        if self.serial_display_after_id is not None:
+            self.after_cancel(self.serial_display_after_id)
+            self.serial_display_after_id = None
         for channel in tuple(self._loop_send_after_ids):
             self._stop_loop_send(channel, False)
         self._serial_close()
