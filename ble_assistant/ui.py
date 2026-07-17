@@ -542,7 +542,7 @@ class BleAssistantApp(tk.Tk):
         multi.columnconfigure(0, weight=1)
         multi.rowconfigure(0, weight=1)
 
-        columns = ("enabled", "order", "command", "comment", "delay")
+        columns = ("enabled", "order", "command", "comment", "ending", "delay")
         self.serial_command_tree = ttk.Treeview(
             multi,
             columns=columns,
@@ -555,6 +555,7 @@ class BleAssistantApp(tk.Tk):
             "order": "顺序",
             "command": "字符串",
             "comment": "注释",
+            "ending": "行尾",
             "delay": "延时(ms)",
         }
         widths = {
@@ -562,6 +563,7 @@ class BleAssistantApp(tk.Tk):
             "order": 54,
             "command": 420,
             "comment": 220,
+            "ending": 72,
             "delay": 80,
         }
         for column in columns:
@@ -591,6 +593,7 @@ class BleAssistantApp(tk.Tk):
         self.serial_cmd_text = tk.StringVar()
         self.serial_cmd_comment = tk.StringVar()
         self.serial_cmd_delay = tk.StringVar(value="1000")
+        self.serial_cmd_line_ending = tk.StringVar(value="crlf")
         ttk.Checkbutton(editor, text="启用", variable=self.serial_cmd_enabled).grid(
             row=0, column=0, padx=(0, 8)
         )
@@ -606,6 +609,14 @@ class BleAssistantApp(tk.Tk):
         ttk.Entry(editor, width=8, textvariable=self.serial_cmd_delay).grid(
             row=0, column=6, padx=(6, 10)
         )
+        ttk.Label(editor, text="行尾").grid(row=0, column=7, sticky="w")
+        ttk.Combobox(
+            editor,
+            textvariable=self.serial_cmd_line_ending,
+            values=("none", "cr", "lf", "crlf"),
+            width=7,
+            state="readonly",
+        ).grid(row=0, column=8, padx=(6, 0))
 
         buttons = ttk.Frame(multi)
         buttons.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=(0, 8))
@@ -1480,6 +1491,7 @@ class BleAssistantApp(tk.Tk):
                     index,
                     str(command.get("command", "")),
                     str(command.get("comment", "")),
+                    str(command.get("line_ending", "crlf")),
                     int(command.get("delay_ms", 1000)),
                 ),
                 tags=("even" if index % 2 == 0 else "odd",),
@@ -1510,6 +1522,7 @@ class BleAssistantApp(tk.Tk):
         self.serial_cmd_text.set(str(command.get("command", "")))
         self.serial_cmd_comment.set(str(command.get("comment", "")))
         self.serial_cmd_delay.set(str(int(command.get("delay_ms", 1000))))
+        self.serial_cmd_line_ending.set(str(command.get("line_ending", "crlf")))
 
     def _serial_command_from_editor(self) -> dict[str, object] | None:
         text = self.serial_cmd_text.get()
@@ -1528,6 +1541,7 @@ class BleAssistantApp(tk.Tk):
             "enabled": self.serial_cmd_enabled.get(),
             "command": text,
             "comment": self.serial_cmd_comment.get(),
+            "line_ending": self.serial_cmd_line_ending.get(),
             "delay_ms": delay_ms,
         }
 
@@ -1609,6 +1623,7 @@ class BleAssistantApp(tk.Tk):
                     "enabled": bool(item.get("enabled", True)),
                     "command": str(item.get("command", "")),
                     "comment": str(item.get("comment", "")),
+                    "line_ending": str(item.get("line_ending", "crlf")),
                     "delay_ms": max(0, int(item.get("delay_ms", 1000))),
                 }
                 for item in raw_commands
@@ -1667,8 +1682,9 @@ class BleAssistantApp(tk.Tk):
             messagebox.showinfo("串口未打开", "请先打开串口")
             return False
         text = str(command.get("command", ""))
+        line_ending = str(command.get("line_ending", "crlf"))
         try:
-            data = encode_payload(text, False, self.serial_line_ending.get())
+            data = encode_payload(text, False, line_ending)
         except Exception as exc:
             self._show_error("串口多条发送失败", exc)
             return False
@@ -1676,9 +1692,9 @@ class BleAssistantApp(tk.Tk):
         suffix = f"（{comment}）" if comment else ""
         return self._submit_serial_write(
             data,
-            lambda count: f"串口多条发送：{text}{suffix}，{count} 字节",
+            lambda count: f"串口多条发送：{text}{suffix}，行尾 {line_ending}，{count} 字节",
             "串口多条发送失败",
-            "SERIAL SEQUENCE",
+            f"SERIAL SEQUENCE {line_ending}",
             False,
         )
 
