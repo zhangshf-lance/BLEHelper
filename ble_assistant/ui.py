@@ -861,13 +861,14 @@ class BleAssistantApp(tk.Tk):
         body = format_payload(data, hex_mode)
         if hex_mode:
             return body
-        return body.replace("\r", "\\r").replace("\n", "\\n")
+        return body.replace("\r\n", "\n").replace("\r", "\n")
 
     def _queue_serial_packet(self, direction: str, data: bytes, hex_mode: bool) -> None:
         timestamp = _dt.datetime.now().strftime("%H:%M:%S.%f")[:-3]
         label = "发送" if direction == "TX" else "接收"
         body = self._format_serial_payload(data, hex_mode)
-        self.serial_display_queue.put(f"[{timestamp}] {label}: {body}\n")
+        ending = "" if body.endswith("\n") else "\n"
+        self.serial_display_queue.put(f"[{timestamp}] {label}: {body}{ending}")
 
     def _schedule_serial_display_flush(self) -> None:
         if self.serial_display_after_id is None:
