@@ -13,6 +13,7 @@ GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
 OPEN_EXISTING = 3
 INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+MAXDWORD = 0xFFFFFFFF
 
 NOPARITY = 0
 ODDPARITY = 1
@@ -222,11 +223,11 @@ class WindowsSerialPort:
             raise _last_error("设置串口参数失败")
 
         timeouts = COMMTIMEOUTS()
-        timeouts.ReadIntervalTimeout = 50
-        timeouts.ReadTotalTimeoutMultiplier = 10
-        timeouts.ReadTotalTimeoutConstant = 50
-        timeouts.WriteTotalTimeoutMultiplier = 10
-        timeouts.WriteTotalTimeoutConstant = 500
+        timeouts.ReadIntervalTimeout = MAXDWORD
+        timeouts.ReadTotalTimeoutMultiplier = 0
+        timeouts.ReadTotalTimeoutConstant = 0
+        timeouts.WriteTotalTimeoutMultiplier = 0
+        timeouts.WriteTotalTimeoutConstant = 200
         if not kernel32.SetCommTimeouts(self._handle, ctypes.byref(timeouts)):
             raise _last_error("设置串口超时失败")
         kernel32.PurgeComm(self._handle, 0x0004 | 0x0008)
@@ -241,7 +242,7 @@ class WindowsSerialPort:
             raise _last_error("串口写入失败")
         return int(written.value)
 
-    def read(self, size: int = 4096) -> bytes:
+    def read(self, size: int = 1024) -> bytes:
         if self._handle is None:
             raise RuntimeError("串口未打开")
         buffer = ctypes.create_string_buffer(size)
@@ -271,7 +272,7 @@ class WindowsSerialPort:
                 if chunk:
                     on_data(chunk)
                 else:
-                    time.sleep(0.02)
+                    time.sleep(0.005)
 
         self._reader = threading.Thread(target=loop, name=f"serial-reader-{self.port}", daemon=True)
         self._reader.start()
